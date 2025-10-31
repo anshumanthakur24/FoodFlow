@@ -18,7 +18,7 @@ const shipmentLocationSchema = new mongoose.Schema({
         type: Number
     },
     eta_iso: {
-        type: Date     // updated ETA from dummy
+        type: Date // optional, recalculated ETA if provided by Dummy
     }
 });
 
