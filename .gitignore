@@ -1,3 +1,7 @@
-.xls
-.cvs
-.xlsx
+*.xls
+*.cvs
+*.xlsx
+
+venv
+
+skipped_rows.json
