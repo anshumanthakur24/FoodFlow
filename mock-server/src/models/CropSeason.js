@@ -14,7 +14,7 @@ const CropSeasonSchema = new mongoose.Schema(
     season_harvest_end_month: Number,
     season_harvest_start_month: Number,
     season_sowing_end_month: Number,
-    season_sowing_start_month: Number
+    season_sowing_start_month: Number,
   },
   { collection: 'crop_seasons' }
 );

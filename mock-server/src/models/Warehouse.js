@@ -10,9 +10,9 @@ const WarehouseSchema = new mongoose.Schema(
     longitude: Number,
     location: {
       type: { type: String },
-      coordinates: [Number]
+      coordinates: [Number],
     },
-    attributes: { type: mongoose.Schema.Types.Mixed }
+    attributes: { type: mongoose.Schema.Types.Mixed },
   },
   { collection: 'warehouses' }
 );

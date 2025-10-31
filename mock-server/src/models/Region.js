@@ -9,12 +9,12 @@ const RegionSchema = new mongoose.Schema(
     slug: { type: String, index: true },
     centroid: {
       type: { type: String },
-      coordinates: [Number]
+      coordinates: [Number],
     },
     latitude: Number,
     longitude: Number,
     population: Number,
-    attributes: { type: mongoose.Schema.Types.Mixed }
+    attributes: { type: mongoose.Schema.Types.Mixed },
   },
   { collection: 'regions' }
 );
