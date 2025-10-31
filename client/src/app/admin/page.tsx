@@ -1,0 +1,412 @@
+﻿"use client";
+
+import React, { useState, useCallback } from "react";
+
+interface Node {
+  id: string;
+  nodeId: string;
+  type: "farm" | "warehouse" | "ngo" | "processing";
+  name: string;
+  regionId: string;
+  location: {
+    coordinates: [number, number];
+  };
+  capacity_kg?: number;
+  contact?: string;
+}
+
+const MOCK_DISTRICTS = [
+  "Mumbai",
+  "Delhi",
+  "Bangalore",
+  "Kolkata",
+  "Chennai",
+  "Hyderabad",
+  "Pune",
+  "Ahmedabad",
+];
+
+const MOCK_DATA: Record<string, Node[]> = {
+  Mumbai: [
+    {
+      id: "1",
+      nodeId: "FARM001",
+      type: "farm",
+      name: "Green Valley Farm",
+      regionId: "Mumbai",
+      location: { coordinates: [72.8777, 19.076] },
+      capacity_kg: 5000,
+      contact: "+91 98765 43210",
+    },
+    {
+      id: "2",
+      nodeId: "WH001",
+      type: "warehouse",
+      name: "Central Storage Facility",
+      regionId: "Mumbai",
+      location: { coordinates: [72.8311, 18.9388] },
+      capacity_kg: 50000,
+      contact: "+91 98765 43211",
+    },
+    {
+      id: "3",
+      nodeId: "NGO001",
+      type: "ngo",
+      name: "Food For All Mumbai",
+      regionId: "Mumbai",
+      location: { coordinates: [72.8479, 19.0176] },
+      contact: "+91 98765 43212",
+    },
+  ],
+  Delhi: [
+    {
+      id: "4",
+      nodeId: "FARM002",
+      type: "farm",
+      name: "Capital Organic Farm",
+      regionId: "Delhi",
+      location: { coordinates: [77.1025, 28.7041] },
+      capacity_kg: 3000,
+      contact: "+91 98765 43213",
+    },
+    {
+      id: "5",
+      nodeId: "WH002",
+      type: "warehouse",
+      name: "North Delhi Warehouse",
+      regionId: "Delhi",
+      location: { coordinates: [77.2315, 28.6139] },
+      capacity_kg: 40000,
+      contact: "+91 98765 43214",
+    },
+  ],
+};
+
+export default function AdminDashboard() {
+  const [selectedDistrict, setSelectedDistrict] = useState<string>("");
+  const [filteredNodes, setFilteredNodes] = useState<Node[]>([]);
+  const [activeTab, setActiveTab] = useState<string>("all");
+
+  const handleDistrictChange = useCallback((district: string) => {
+    setSelectedDistrict(district);
+    if (district) {
+      setFilteredNodes(MOCK_DATA[district] || []);
+    } else {
+      setFilteredNodes([]);
+    }
+    setActiveTab("all");
+  }, []);
+
+  const farms = filteredNodes.filter((node) => node.type === "farm");
+  const warehouses = filteredNodes.filter((node) => node.type === "warehouse");
+  const ngos = filteredNodes.filter((node) => node.type === "ngo");
+  const processing = filteredNodes.filter((node) => node.type === "processing");
+
+  const getDisplayNodes = () => {
+    switch (activeTab) {
+      case "farm":
+        return farms;
+      case "warehouse":
+        return warehouses;
+      case "ngo":
+        return ngos;
+      case "processing":
+        return processing;
+      default:
+        return filteredNodes;
+    }
+  };
+
+  const displayNodes = getDisplayNodes();
+
+  return (
+    <div className="min-h-screen bg-zinc-50 dark:bg-black">
+      <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded bg-zinc-900 dark:bg-zinc-100">
+                <svg
+                  className="h-5 w-5 text-white dark:text-black"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                  />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+                  Supply Chain Dashboard
+                </h1>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Network Operations Center
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
+                India Region
+              </span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <label
+              htmlFor="district"
+              className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+            >
+              District
+            </label>
+            <select
+              id="district"
+              value={selectedDistrict}
+              onChange={(e) => handleDistrictChange(e.target.value)}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+            >
+              <option value="">Select district</option>
+              {MOCK_DISTRICTS.map((district) => (
+                <option key={district} value={district}>
+                  {district}
+                </option>
+              ))}
+            </select>
+          </div>
+          {selectedDistrict && (
+            <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+              <span>Showing:</span>
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                {selectedDistrict}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {selectedDistrict && filteredNodes.length > 0 && (
+          <>
+            <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <button
+                onClick={() => setActiveTab("farm")}
+                className={`rounded-lg border p-4 text-left transition-colors ${activeTab === "farm" ? "border-green-600 bg-green-50 dark:border-green-500 dark:bg-green-950" : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"}`}
+              >
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Farms
+                </div>
+                <div className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  {farms.length}
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab("warehouse")}
+                className={`rounded-lg border p-4 text-left transition-colors ${activeTab === "warehouse" ? "border-blue-600 bg-blue-50 dark:border-blue-500 dark:bg-blue-950" : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"}`}
+              >
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Warehouses
+                </div>
+                <div className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  {warehouses.length}
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab("ngo")}
+                className={`rounded-lg border p-4 text-left transition-colors ${activeTab === "ngo" ? "border-purple-600 bg-purple-50 dark:border-purple-500 dark:bg-purple-950" : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"}`}
+              >
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  NGOs
+                </div>
+                <div className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  {ngos.length}
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab("processing")}
+                className={`rounded-lg border p-4 text-left transition-colors ${activeTab === "processing" ? "border-orange-600 bg-orange-50 dark:border-orange-500 dark:bg-orange-950" : "border-zinc-200 bg-white hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800"}`}
+              >
+                <div className="mb-1 text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                  Processing
+                </div>
+                <div className="text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
+                  {processing.length}
+                </div>
+              </button>
+            </div>
+
+            <div className="mb-4 flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800">
+              <button
+                onClick={() => setActiveTab("all")}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${activeTab === "all" ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"}`}
+              >
+                All ({filteredNodes.length})
+              </button>
+              <button
+                onClick={() => setActiveTab("farm")}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${activeTab === "farm" ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"}`}
+              >
+                Farms ({farms.length})
+              </button>
+              <button
+                onClick={() => setActiveTab("warehouse")}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${activeTab === "warehouse" ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"}`}
+              >
+                Warehouses ({warehouses.length})
+              </button>
+              <button
+                onClick={() => setActiveTab("ngo")}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${activeTab === "ngo" ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"}`}
+              >
+                NGOs ({ngos.length})
+              </button>
+              <button
+                onClick={() => setActiveTab("processing")}
+                className={`border-b-2 px-4 py-2 text-sm font-medium transition-colors ${activeTab === "processing" ? "border-zinc-900 text-zinc-900 dark:border-zinc-100 dark:text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"}`}
+              >
+                Processing ({processing.length})
+              </button>
+            </div>
+
+            <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-950">
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Node ID
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Name
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Type
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Capacity
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Contact
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Location
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+                  {displayNodes.length > 0 ? (
+                    displayNodes.map((node) => (
+                      <tr
+                        key={node.id}
+                        className="transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                      >
+                        <td className="px-4 py-3 text-sm font-mono text-zinc-600 dark:text-zinc-400">
+                          {node.nodeId}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-zinc-900 dark:text-zinc-100">
+                            {node.name}
+                          </div>
+                          <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                            {node.regionId}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${node.type === "farm" ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400" : node.type === "warehouse" ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400" : node.type === "ngo" ? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-400" : "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400"}`}
+                          >
+                            {node.type}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100">
+                          {node.capacity_kg
+                            ? `${node.capacity_kg.toLocaleString()} kg`
+                            : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">
+                          {node.contact || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-xs font-mono text-zinc-500 dark:text-zinc-400">
+                          {node.location.coordinates[1].toFixed(4)},{" "}
+                          {node.location.coordinates[0].toFixed(4)}
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-4 py-12 text-center text-sm text-zinc-500 dark:text-zinc-400"
+                      >
+                        No facilities found in this category
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {!selectedDistrict && (
+          <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-center">
+              <svg
+                className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
+                />
+              </svg>
+              <h3 className="mt-4 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                No district selected
+              </h3>
+              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                Select a district to view facilities
+              </p>
+            </div>
+          </div>
+        )}
+
+        {selectedDistrict && filteredNodes.length === 0 && (
+          <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="text-center">
+              <svg
+                className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                />
+              </svg>
+              <h3 className="mt-4 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                No facilities found
+              </h3>
+              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                No facilities registered in {selectedDistrict}
+              </p>
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
