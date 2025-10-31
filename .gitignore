@@ -5,3 +5,7 @@
 venv
 
 skipped_rows.json
+
+node_modules
+
+*.env
