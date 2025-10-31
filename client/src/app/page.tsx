@@ -3,8 +3,9 @@
 import { useState, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import TimelineControl from '@/components/TimelineControl';
-import { generateFoodTimelineData } from '@/data/generateFoodTimelineData';
+import { generateFoodTimelineData } from '@/data/sampleFoodData';
 
+// Dynamically import MapTimeline to avoid SSR issues with Leaflet
 const MapTimeline = dynamic(() => import('@/components/MapTimeline'), {
   ssr: false,
   loading: () => (
@@ -18,13 +19,18 @@ const MapTimeline = dynamic(() => import('@/components/MapTimeline'), {
 });
 
 export default function Home() {
-  const { nodes, events, shipments, shipmentLocations, batches } = useMemo(() => generateFoodTimelineData(), []);
+  // Generate food timeline data with nodes, shipments, and events
+  const { nodes, shipments, events, shipmentLocationUpdates } = useMemo(
+    () => generateFoodTimelineData(),
+    []
+  );
 
+  // Calculate time range from events
   const { startTime, endTime } = useMemo(() => {
     if (events.length === 0) {
       const now = new Date();
       return {
-        startTime: new Date(now.getTime() - 20000),
+        startTime: new Date(now.getTime() - 20000), // 20 seconds fallback
         endTime: now,
       };
     }
@@ -36,11 +42,13 @@ export default function Home() {
     };
   }, [events]);
 
+  // Current time state
   const [currentTime, setCurrentTime] = useState(startTime);
   const [isPlaying, setIsPlaying] = useState(false);
 
   return (
     <div className="w-screen h-screen flex flex-col bg-gray-50">
+      {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm z-10">
         <div className="max-w-7xl mx-auto">
           <h1 className="text-2xl font-bold text-gray-900">Food Timeline Animation</h1>
@@ -50,20 +58,21 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Main Content */}
       <main className="flex-1 relative overflow-hidden">
         <div className="absolute inset-0">
           <MapTimeline
             nodes={nodes}
             events={events}
             shipments={shipments}
-            shipmentLocations={shipmentLocations}
-            batches={batches}
+            shipmentLocationUpdates={shipmentLocationUpdates}
             currentTime={currentTime}
             startTime={startTime}
             endTime={endTime}
           />
         </div>
 
+        {/* Timeline Control */}
         <TimelineControl
           startTime={startTime}
           endTime={endTime}
@@ -71,9 +80,10 @@ export default function Home() {
           onTimeChange={setCurrentTime}
           isPlaying={isPlaying}
           onPlayPause={setIsPlaying}
-          playbackSpeed={2000}
+          playbackSpeed={2000} // 2000ms = 2x speed (20s animation plays in 10s)
         />
 
+        {/* Legend */}
         <div className="absolute top-4 left-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-4 z-[1000] border border-gray-200">
           <h3 className="font-semibold text-sm mb-3 text-gray-900">Node Types</h3>
           <div className="space-y-2">
@@ -102,8 +112,8 @@ export default function Home() {
                 <span className="text-xs text-gray-700">In Transit</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-6 h-0.5 bg-purple-500 border-dashed"></div>
-                <span className="text-xs text-gray-700">Reserved</span>
+                <div className="w-6 h-0.5 bg-gray-400 border-dashed"></div>
+                <span className="text-xs text-gray-700">Completed</span>
               </div>
             </div>
           </div>

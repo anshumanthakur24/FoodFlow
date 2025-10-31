@@ -9,7 +9,7 @@ interface TimelineControlProps {
   onTimeChange: (time: Date) => void;
   isPlaying: boolean;
   onPlayPause: (playing: boolean) => void;
-  playbackSpeed?: number;
+  playbackSpeed?: number; // milliseconds per second
 }
 
 export default function TimelineControl({
@@ -19,26 +19,29 @@ export default function TimelineControl({
   onTimeChange,
   isPlaying,
   onPlayPause,
-  playbackSpeed = 2000,
+  playbackSpeed = 1000, // 1 second per second by default
 }: TimelineControlProps) {
   const [isDragging, setIsDragging] = useState(false);
 
+  // Calculate position percentage
   const totalDuration = endTime.getTime() - startTime.getTime();
   const currentPosition = currentTime.getTime() - startTime.getTime();
   const percentage = Math.max(0, Math.min(100, (currentPosition / totalDuration) * 100));
 
+  // Handle slider change
   const handleSliderChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newPercentage = parseFloat(e.target.value);
     const newTime = new Date(startTime.getTime() + (newPercentage / 100) * totalDuration);
     onTimeChange(newTime);
   }, [startTime, totalDuration, onTimeChange]);
 
+  // Auto-play animation
   useEffect(() => {
     if (!isPlaying) return;
 
     const interval = setInterval(() => {
       const currentPos = currentTime.getTime() - startTime.getTime();
-      const newPos = currentPos + playbackSpeed / 10;
+      const newPos = currentPos + playbackSpeed / 10; // Update 10 times per second
 
       if (newPos >= totalDuration) {
         onTimeChange(endTime);
@@ -53,11 +56,12 @@ export default function TimelineControl({
   }, [isPlaying, currentTime, startTime, endTime, totalDuration, playbackSpeed, onTimeChange, onPlayPause]);
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString('en-US', {
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
     });
   };
 
@@ -66,13 +70,13 @@ export default function TimelineControl({
   };
 
   const handleStepBack = () => {
-    const stepTime = totalDuration / 100;
+    const stepTime = totalDuration / 100; // 1% of timeline
     const newTime = new Date(Math.max(startTime.getTime(), currentTime.getTime() - stepTime));
     onTimeChange(newTime);
   };
 
   const handleStepForward = () => {
-    const stepTime = totalDuration / 100;
+    const stepTime = totalDuration / 100; // 1% of timeline
     const newTime = new Date(Math.min(endTime.getTime(), currentTime.getTime() + stepTime));
     onTimeChange(newTime);
   };
@@ -80,6 +84,7 @@ export default function TimelineControl({
   return (
     <div className="absolute bottom-4 left-4 right-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-4 z-[1000] border border-gray-200">
       <div className="flex items-center gap-4">
+        {/* Play/Pause Button */}
         <button
           onClick={handlePlayPause}
           className="flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 hover:bg-blue-700 text-white transition-colors"
@@ -96,6 +101,7 @@ export default function TimelineControl({
           )}
         </button>
 
+        {/* Step Back */}
         <button
           onClick={handleStepBack}
           className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-700 transition-colors"
@@ -106,12 +112,14 @@ export default function TimelineControl({
           </svg>
         </button>
 
+        {/* Time Display */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between mb-1 text-sm text-gray-600">
             <span className="truncate">{formatTime(startTime)}</span>
             <span className="font-semibold text-gray-900 px-2">{formatTime(currentTime)}</span>
             <span className="truncate">{formatTime(endTime)}</span>
           </div>
+          {/* Slider */}
           <input
             type="range"
             min="0"
@@ -125,6 +133,7 @@ export default function TimelineControl({
           />
         </div>
 
+        {/* Step Forward */}
         <button
           onClick={handleStepForward}
           className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 text-gray-700 transition-colors"
