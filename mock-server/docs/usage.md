@@ -64,3 +64,13 @@ Retrieve scenario metadata, status, configuration, and stats.
 ### GET `/api/scenario/:id/events?limit=100`
 
 Fetch recent events persisted in MongoDB (`sim_events`). `limit` defaults to 100 and is capped at 500.
+
+## Docker
+
+Build and launch the mock server alongside MongoDB with seeded reference data:
+
+1. From the repo root run `docker compose up --build`.
+2. Wait for the entrypoint logs to show the Python data prep scripts completing (`auto-download.py`, `excel-to-mongo.py`, `infer-seasons.py`).
+3. Interact with the API at `http://localhost:5001` once the "Starting Scenario Manager" log appears.
+
+The compose setup exposes an optional `MONGO_DB` environment variable that defaults to the database parsed from `MONGO_URI`. Setting `SKIP_DATA_SETUP=1` on the `mock-server` service skips the Python loaders if you already have seeded data.
