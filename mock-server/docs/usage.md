@@ -1,18 +1,5 @@
 # Scenario Manager Mock Server Usage
 
-## Prerequisites
-
-- Node.js 18+
-- MongoDB instance (local or remote)
-- Optional: companion Test Server (`test-server`) running on port 4000 for verifying outbound events
-
-## Installation
-
-```powershell
-cd "E:\Projects\Complete\Arcanix Hack on Hills\mock-server"
-npm install
-```
-
 ## Configuration
 
 Create a `.env` file in `mock-server/` with environment overrides as needed:
@@ -32,16 +19,6 @@ SCENARIO_PROB_NGO=0.05
 ```
 
 Any unset value falls back to the defaults above.
-
-## Running the Mock Server
-
-```powershell
-npm run dev   # nodemon for hot reload
-# or
-npm start     # plain node
-```
-
-The service will connect to MongoDB and listen on `PORT` (default `5001`). It exposes REST endpoints under `/api/scenario`.
 
 ## API Endpoints
 
@@ -87,31 +64,3 @@ Retrieve scenario metadata, status, configuration, and stats.
 ### GET `/api/scenario/:id/events?limit=100`
 
 Fetch recent events persisted in MongoDB (`sim_events`). `limit` defaults to 100 and is capped at 500.
-
-## Event Flow
-
-- Each tick (based on `intervalMs`) the manager builds a batch of events (up to `batchSize`).
-- The generator uses seeded randomness (`seed` + `scenarioId` + tick index) to keep runs deterministic.
-- Generated events are inserted into MongoDB and POSTed asynchronously to the configured Main API routes. Use the Test Server to observe these callbacks.
-
-## Synthetic Region Fallback
-
-If the `regions` collection is empty, the manager synthesizes regions from `crop_seasons` documents to keep the simulation running.
-
-## Testing with the Companion Test Server
-
-```powershell
-cd "E:\Projects\Complete\Arcanix Hack on Hills\test-server"
-npm install
-npm start  # listens on 4000
-```
-
-Set `MAIN_API_URL=http://localhost:4000` in the mock-server `.env`. Start a scenario and observe logs in the test server or query `GET http://localhost:4000/api/received` for captured payloads.
-
-## Useful Scripts
-
-Sample curl requests are available in `scripts/scenario-curl-examples.sh` (update host/port as needed).
-
-## Shutdown
-
-Stop the mock server with `Ctrl+C`. Any running scenarios are marked as stopped when the process exits.
