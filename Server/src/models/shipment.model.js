@@ -50,7 +50,14 @@ const shipmentSchema = new mongoose.Schema({
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
+    },
+
+    // 🆕 New Field — Latest known position of shipment
+    latest_location: {
+        coordinates: { type: [Number] }, // [lon, lat]
+        timestamp: { type: Date }
     }
 });
+
 
 export const Shipment = mongoose.model("Shipment", shipmentSchema);

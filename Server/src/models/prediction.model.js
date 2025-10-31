@@ -17,7 +17,7 @@ const predictionSchema = new mongoose.Schema({
         required: true
     },
     horizon: {
-        type: Number // days ahead
+        type: Number
     },
     predicted_demand_kg: {
         type: Number
@@ -32,5 +32,6 @@ const predictionSchema = new mongoose.Schema({
         type: Object
     }
 });
+
 
 export const Prediction = mongoose.model("Prediction", predictionSchema);
