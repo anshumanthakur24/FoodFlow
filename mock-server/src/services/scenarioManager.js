@@ -12,7 +12,7 @@ const {
   MAIN_API_TIMEOUT_MS,
   MAX_BATCH_SIZE,
   MIN_INTERVAL_MS,
-  DEFAULT_PROBABILITIES
+  DEFAULT_PROBABILITIES,
 } = require('../config');
 
 const activeScenarios = new Map();
@@ -23,13 +23,15 @@ const fetchApi = (...args) => {
 };
 
 function normalizeBatchSize(value) {
-  if (!value || Number.isNaN(Number(value))) return Math.min(50, MAX_BATCH_SIZE);
+  if (!value || Number.isNaN(Number(value)))
+    return Math.min(50, MAX_BATCH_SIZE);
   const numeric = Math.max(1, Math.floor(Number(value)));
   return Math.min(numeric, MAX_BATCH_SIZE);
 }
 
 function normalizeInterval(value) {
-  if (!value || Number.isNaN(Number(value))) return Math.max(1000, MIN_INTERVAL_MS);
+  if (!value || Number.isNaN(Number(value)))
+    return Math.max(1000, MIN_INTERVAL_MS);
   const numeric = Math.max(MIN_INTERVAL_MS, Math.floor(Number(value)));
   return numeric;
 }
@@ -41,34 +43,101 @@ function normalizeProbabilities(input) {
   return {
     farm: source.farm / sum,
     shipment: source.shipment / sum,
-    ngo: source.ngo / sum
+    ngo: source.ngo / sum,
   };
 }
 
+function createAdhocRegions(filterList) {
+  return filterList.map((value, index) => ({
+    name: value,
+    state: value,
+    district: null,
+    code: `filter-${index + 1}`,
+    attributes: { synthetic: true, source: 'user-filter' },
+  }));
+}
+
+async function synthesizeRegions(filterList) {
+  const query = {};
+  if (filterList.length) {
+    query.$or = [
+      { state: { $in: filterList } },
+      { district: { $in: filterList } },
+      { crop: { $in: filterList } },
+    ];
+  }
+  const seasons = await CropSeason.find(query)
+    .sort({ state: 1, district: 1, crop: 1 })
+    .limit(500)
+    .lean();
+  if (!seasons.length) return [];
+  const seen = new Set();
+  const synthetic = [];
+  for (const entry of seasons) {
+    const state = entry.state || null;
+    const district = entry.district || null;
+    const key = `${state || ''}|${district || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const parts = [district, state].filter(Boolean);
+    const name = parts.join(', ') || entry.crop || 'Synthetic Region';
+    const code =
+      district || state || entry.crop || `synthetic-${synthetic.length + 1}`;
+    synthetic.push({
+      name,
+      state,
+      district,
+      code,
+      attributes: { synthetic: true, source: 'crop-seasons' },
+    });
+    if (synthetic.length >= 100) break;
+  }
+  return synthetic;
+}
+
 async function loadRegions(regionFilter) {
-  const filterList = Array.isArray(regionFilter) ? regionFilter.filter(Boolean) : [];
+  const filterList = Array.isArray(regionFilter)
+    ? regionFilter.filter(Boolean)
+    : [];
   if (filterList.length) {
     const regions = await Region.find({
       $or: [
         { code: { $in: filterList } },
         { slug: { $in: filterList } },
-        { name: { $in: filterList } }
-      ]
+        { name: { $in: filterList } },
+      ],
     })
       .sort({ name: 1 })
       .lean();
     if (regions.length) return regions;
+    const syntheticFromFilter = await synthesizeRegions(filterList);
+    if (syntheticFromFilter.length) return syntheticFromFilter;
+    const adhocFromFilter = createAdhocRegions(filterList);
+    if (adhocFromFilter.length) return adhocFromFilter;
   }
   const fallback = await Region.find({}).sort({ name: 1 }).lean();
-  if (!fallback.length) throw new Error('No regions available for simulation');
-  return fallback;
+  if (fallback.length) return fallback;
+  const syntheticAll = await synthesizeRegions([]);
+  if (syntheticAll.length) return syntheticAll;
+  const defaultRegions = createAdhocRegions([
+    'Andhra Pradesh',
+    'Bihar',
+    'Gujarat',
+    'Karnataka',
+    'Maharashtra',
+    'Uttar Pradesh',
+  ]);
+  if (defaultRegions.length) return defaultRegions;
+  throw new Error('No regions available for simulation');
 }
 
 async function loadWarehouses(regions) {
-  const regionCodes = regions.map(r => r.code).filter(Boolean);
+  const regionCodes = regions.map((r) => r.code).filter(Boolean);
   let warehouses = [];
   if (regionCodes.length) {
-    warehouses = await Warehouse.find({ regionCode: { $in: regionCodes } }).sort({ name: 1 }).lean();
+    warehouses = await Warehouse.find({ regionCode: { $in: regionCodes } })
+      .sort({ name: 1 })
+      .lean();
   }
   if (warehouses.length) return warehouses;
   const fallback = await Warehouse.find({}).sort({ name: 1 }).lean();
@@ -81,7 +150,10 @@ function createEventId(key) {
 
 function deriveEventTimestamp(runtime, tickTimestamp, eventIndex) {
   if (runtime.batchSize <= 1) return new Date(tickTimestamp.getTime());
-  const spacing = Math.max(1, Math.floor(runtime.intervalMs / runtime.batchSize));
+  const spacing = Math.max(
+    1,
+    Math.floor(runtime.intervalMs / runtime.batchSize)
+  );
   return new Date(tickTimestamp.getTime() + spacing * eventIndex);
 }
 
@@ -94,15 +166,19 @@ function parseCropYear(sourceFile, fallbackDate) {
 }
 
 function isInSeason(entry, month) {
-  const sowStart = entry.season_sowing_start_month || entry.season_harvest_start_month;
-  const harvestEnd = entry.season_harvest_end_month || entry.season_harvest_start_month;
+  const sowStart =
+    entry.season_sowing_start_month || entry.season_harvest_start_month;
+  const harvestEnd =
+    entry.season_harvest_end_month || entry.season_harvest_start_month;
   if (!sowStart || !harvestEnd) return true;
   if (sowStart <= harvestEnd) return month >= sowStart && month <= harvestEnd;
   return month >= sowStart || month <= harvestEnd;
 }
 
 function resolveRegionForShipment(runtime, rng) {
-  const available = runtime.farmInventory.filter(item => item.availableTonnes > 0);
+  const available = runtime.farmInventory.filter(
+    (item) => item.availableTonnes > 0
+  );
   if (!available.length) return null;
   const index = Math.floor(rng() * available.length);
   return available[index];
@@ -131,7 +207,9 @@ function resolveWarehouse(runtime, regionEntry, rng) {
 }
 
 async function fetchCropEntries(runtime, region) {
-  const cacheKey = region._id ? region._id.toString() : `${region.state || ''}:${region.district || ''}:${region.name || ''}`;
+  const cacheKey = region._id
+    ? region._id.toString()
+    : `${region.state || ''}:${region.district || ''}:${region.name || ''}`;
   if (runtime.cropCache.has(cacheKey)) return runtime.cropCache.get(cacheKey);
   const query = {};
   if (region.state) query.state = region.state;
@@ -144,7 +222,14 @@ async function fetchCropEntries(runtime, region) {
   return entries;
 }
 
-function buildFarmPayload(runtime, region, cropEntry, producedTonnes, eventTimestamp, eventId) {
+function buildFarmPayload(
+  runtime,
+  region,
+  cropEntry,
+  producedTonnes,
+  eventTimestamp,
+  eventId
+) {
   return {
     scenarioId: runtime.scenario._id.toString(),
     eventId,
@@ -156,31 +241,47 @@ function buildFarmPayload(runtime, region, cropEntry, producedTonnes, eventTimes
       name: region.name || null,
       state: region.state || null,
       district: region.district || null,
-      code: region.code || null
+      code: region.code || null,
     },
     crop: {
       name: cropEntry ? cropEntry.crop || null : null,
       season: cropEntry ? cropEntry.season || null : null,
-      year: parseCropYear(cropEntry ? cropEntry.source_file : null, eventTimestamp),
+      year: parseCropYear(
+        cropEntry ? cropEntry.source_file : null,
+        eventTimestamp
+      ),
       sowingWindow: {
-        startMonth: cropEntry ? cropEntry.season_sowing_start_month || null : null,
-        endMonth: cropEntry ? cropEntry.season_sowing_end_month || null : null
+        startMonth: cropEntry
+          ? cropEntry.season_sowing_start_month || null
+          : null,
+        endMonth: cropEntry ? cropEntry.season_sowing_end_month || null : null,
       },
       harvestWindow: {
-        startMonth: cropEntry ? cropEntry.season_harvest_start_month || null : null,
-        endMonth: cropEntry ? cropEntry.season_harvest_end_month || null : null
-      }
+        startMonth: cropEntry
+          ? cropEntry.season_harvest_start_month || null
+          : null,
+        endMonth: cropEntry ? cropEntry.season_harvest_end_month || null : null,
+      },
     },
     quantityTonnes: Number(producedTonnes.toFixed(2)),
     metrics: {
       areaHectare: cropEntry ? cropEntry.area_hectare || null : null,
       yieldTonHa: cropEntry ? cropEntry.yield_tonha || null : null,
-      productionTonnes: cropEntry ? cropEntry.production_tonnes || null : null
-    }
+      productionTonnes: cropEntry ? cropEntry.production_tonnes || null : null,
+    },
   };
 }
 
-function buildShipmentPayload(runtime, batch, warehouse, distanceKm, quantity, eventTimestamp, eta, eventId) {
+function buildShipmentPayload(
+  runtime,
+  batch,
+  warehouse,
+  distanceKm,
+  quantity,
+  eventTimestamp,
+  eta,
+  eventId
+) {
   return {
     scenarioId: runtime.scenario._id.toString(),
     shipmentId: eventId,
@@ -194,24 +295,32 @@ function buildShipmentPayload(runtime, batch, warehouse, distanceKm, quantity, e
       regionName: batch.region.name || null,
       state: batch.region.state || null,
       district: batch.region.district || null,
-      code: batch.region.code || null
+      code: batch.region.code || null,
     },
     destination: {
       warehouseId: warehouse && warehouse._id ? warehouse._id.toString() : null,
       name: warehouse ? warehouse.name || null : null,
       code: warehouse ? warehouse.code || null : null,
-      regionCode: warehouse ? warehouse.regionCode || null : null
+      regionCode: warehouse ? warehouse.regionCode || null : null,
     },
     quantityTonnes: Number(quantity.toFixed(2)),
     distanceKm: distanceKm !== null ? Number(distanceKm.toFixed(2)) : null,
     routeProfile: {
       speedKmph: batch.speedKmph,
-      travelHours: batch.travelHours
-    }
+      travelHours: batch.travelHours,
+    },
   };
 }
 
-function buildNgoPayload(runtime, region, severity, needs, eventTimestamp, deadline, eventId) {
+function buildNgoPayload(
+  runtime,
+  region,
+  severity,
+  needs,
+  eventTimestamp,
+  deadline,
+  eventId
+) {
   return {
     scenarioId: runtime.scenario._id.toString(),
     requestId: eventId,
@@ -224,10 +333,10 @@ function buildNgoPayload(runtime, region, severity, needs, eventTimestamp, deadl
       name: region.name || null,
       state: region.state || null,
       district: region.district || null,
-      code: region.code || null
+      code: region.code || null,
     },
     severity,
-    needs
+    needs,
   };
 }
 
@@ -237,22 +346,32 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
   const region = runtime.regions[regionIndex];
   const entries = await fetchCropEntries(runtime, region);
   const month = eventTimestamp.getUTCMonth() + 1;
-  const inSeason = entries.filter(entry => isInSeason(entry, month));
+  const inSeason = entries.filter((entry) => isInSeason(entry, month));
   const pool = inSeason.length ? inSeason : entries;
   const cropEntry = pool.length ? pool[Math.floor(rng() * pool.length)] : null;
-  const baseProduction = cropEntry && cropEntry.area_hectare && cropEntry.yield_tonha ? cropEntry.area_hectare * cropEntry.yield_tonha : 0;
+  const baseProduction =
+    cropEntry && cropEntry.area_hectare && cropEntry.yield_tonha
+      ? cropEntry.area_hectare * cropEntry.yield_tonha
+      : 0;
   const scale = 0.85 + rng() * 0.3;
   const fallback = 40 + rng() * 120;
   const producedTonnes = baseProduction > 0 ? baseProduction * scale : fallback;
   const eventId = createEventId(eventKey);
-  const payload = buildFarmPayload(runtime, region, cropEntry, producedTonnes, eventTimestamp, eventId);
+  const payload = buildFarmPayload(
+    runtime,
+    region,
+    cropEntry,
+    producedTonnes,
+    eventTimestamp,
+    eventId
+  );
   runtime.farmInventory.push({
     eventId,
     region,
     crop: cropEntry ? cropEntry.crop || null : null,
     season: cropEntry ? cropEntry.season || null : null,
     availableTonnes: payload.quantityTonnes,
-    timestamp: eventTimestamp
+    timestamp: eventTimestamp,
   });
   return {
     type: 'farm',
@@ -262,12 +381,12 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
       type: 'farm',
       payload,
       tickIndex: runtime.tickIndex,
-      timestamp: eventTimestamp
+      timestamp: eventTimestamp,
     },
     apiRequest: {
       url: `${MAIN_API_URL}${MAIN_API_ROUTES.farm}`,
-      body: payload
-    }
+      body: payload,
+    },
   };
 }
 
@@ -277,7 +396,9 @@ async function createShipmentEvent(runtime, rng, eventKey, eventTimestamp) {
   const fraction = 0.25 + rng() * 0.5;
   const maxQuantity = Math.max(1, batch.availableTonnes * fraction);
   const quantity = Math.min(batch.availableTonnes, maxQuantity);
-  batch.availableTonnes = Number(Math.max(0, batch.availableTonnes - quantity).toFixed(2));
+  batch.availableTonnes = Number(
+    Math.max(0, batch.availableTonnes - quantity).toFixed(2)
+  );
   const { warehouse, distanceKm } = resolveWarehouse(runtime, batch, rng);
   const distanceValue = distanceKm !== null ? distanceKm : 50 + rng() * 300;
   const speedKmph = 40 + rng() * 30;
@@ -286,7 +407,16 @@ async function createShipmentEvent(runtime, rng, eventKey, eventTimestamp) {
   batch.travelHours = Number(travelHours.toFixed(2));
   const eta = new Date(eventTimestamp.getTime() + travelHours * 3600000);
   const eventId = createEventId(eventKey);
-  const payload = buildShipmentPayload(runtime, batch, warehouse, distanceValue, quantity, eventTimestamp, eta, eventId);
+  const payload = buildShipmentPayload(
+    runtime,
+    batch,
+    warehouse,
+    distanceValue,
+    quantity,
+    eventTimestamp,
+    eta,
+    eventId
+  );
   return {
     type: 'shipment',
     timestamp: eventTimestamp,
@@ -295,12 +425,12 @@ async function createShipmentEvent(runtime, rng, eventKey, eventTimestamp) {
       type: 'shipment',
       payload,
       tickIndex: runtime.tickIndex,
-      timestamp: eventTimestamp
+      timestamp: eventTimestamp,
     },
     apiRequest: {
       url: `${MAIN_API_URL}${MAIN_API_ROUTES.shipment}`,
-      body: payload
-    }
+      body: payload,
+    },
   };
 }
 
@@ -312,13 +442,26 @@ async function createNgoEvent(runtime, rng, eventKey, eventTimestamp) {
   const needsPool = ['cereals', 'pulses', 'fertilizer', 'seeds', 'logistics'];
   const needsCount = Math.max(1, Math.floor(rng() * needsPool.length));
   const needs = Array.from({ length: needsCount }, (_, idx) => {
-    const choice = needsPool[(idx + Math.floor(rng() * needsPool.length)) % needsPool.length];
+    const choice =
+      needsPool[
+        (idx + Math.floor(rng() * needsPool.length)) % needsPool.length
+      ];
     const quantity = Number((10 + rng() * 90).toFixed(2));
     return { item: choice, quantityTonnes: quantity };
   });
-  const deadline = new Date(eventTimestamp.getTime() + (2 + rng() * 5) * 86400000);
+  const deadline = new Date(
+    eventTimestamp.getTime() + (2 + rng() * 5) * 86400000
+  );
   const eventId = createEventId(eventKey);
-  const payload = buildNgoPayload(runtime, region, severity, needs, eventTimestamp, deadline, eventId);
+  const payload = buildNgoPayload(
+    runtime,
+    region,
+    severity,
+    needs,
+    eventTimestamp,
+    deadline,
+    eventId
+  );
   return {
     type: 'ngo',
     timestamp: eventTimestamp,
@@ -327,12 +470,12 @@ async function createNgoEvent(runtime, rng, eventKey, eventTimestamp) {
       type: 'ngo',
       payload,
       tickIndex: runtime.tickIndex,
-      timestamp: eventTimestamp
+      timestamp: eventTimestamp,
     },
     apiRequest: {
       url: `${MAIN_API_URL}${MAIN_API_ROUTES.ngo}`,
-      body: payload
-    }
+      body: payload,
+    },
   };
 }
 
@@ -347,12 +490,27 @@ async function generateEvents(runtime, tickTimestamp) {
     let event;
     if (roll < runtime.probabilities.farm) {
       event = await createFarmEvent(runtime, rng, eventKey, eventTimestamp);
-    } else if (roll < runtime.probabilities.farm + runtime.probabilities.shipment) {
+    } else if (
+      roll <
+      runtime.probabilities.farm + runtime.probabilities.shipment
+    ) {
       event = await createShipmentEvent(runtime, rng, eventKey, eventTimestamp);
-      if (!event) event = await createFarmEvent(runtime, rng, `${eventKey}:fallback`, eventTimestamp);
+      if (!event)
+        event = await createFarmEvent(
+          runtime,
+          rng,
+          `${eventKey}:fallback`,
+          eventTimestamp
+        );
     } else {
       event = await createNgoEvent(runtime, rng, eventKey, eventTimestamp);
-      if (!event) event = await createFarmEvent(runtime, rng, `${eventKey}:fallback`, eventTimestamp);
+      if (!event)
+        event = await createFarmEvent(
+          runtime,
+          rng,
+          `${eventKey}:fallback`,
+          eventTimestamp
+        );
     }
     if (event) events.push(event);
   }
@@ -367,7 +525,7 @@ async function postJson(url, body) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: controller.signal
+      signal: controller.signal,
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
@@ -382,18 +540,20 @@ async function postJson(url, body) {
 
 async function dispatchEvents(events) {
   if (!events.length) return;
-  const tasks = events.map(event => postJson(event.apiRequest.url, event.apiRequest.body));
+  const tasks = events.map((event) =>
+    postJson(event.apiRequest.url, event.apiRequest.body)
+  );
   await Promise.allSettled(tasks);
 }
 
 async function persistEvents(events) {
   if (!events.length) return;
-  const docs = events.map(event => ({
+  const docs = events.map((event) => ({
     scenarioId: event.record.scenarioId,
     type: event.record.type,
     payload: event.record.payload,
     tickIndex: event.record.tickIndex,
-    timestamp: event.record.timestamp
+    timestamp: event.record.timestamp,
   }));
   await SimEvent.insertMany(docs, { ordered: false });
 }
@@ -403,15 +563,24 @@ function scheduleNext(runtime) {
   runtime.timer = setTimeout(async () => {
     try {
       if (!runtime.active) return;
-      if (runtime.durationMs && Date.now() - runtime.startedAt >= runtime.durationMs) {
+      if (
+        runtime.durationMs &&
+        Date.now() - runtime.startedAt >= runtime.durationMs
+      ) {
         await runtime.stop(true);
         return;
       }
-      const tickTimestamp = new Date(runtime.scenario.startDate.getTime() + runtime.tickIndex * runtime.intervalMs);
+      const tickTimestamp = new Date(
+        runtime.scenario.startDate.getTime() +
+          runtime.tickIndex * runtime.intervalMs
+      );
       const events = await generateEvents(runtime, tickTimestamp);
       if (events.length) {
         await persistEvents(events);
-        await Scenario.updateOne({ _id: runtime.scenario._id }, { $inc: { 'stats.totalEventsSent': events.length } });
+        await Scenario.updateOne(
+          { _id: runtime.scenario._id },
+          { $inc: { 'stats.totalEventsSent': events.length } }
+        );
         runtime.sentEvents += events.length;
         await dispatchEvents(events);
       }
@@ -421,7 +590,10 @@ function scheduleNext(runtime) {
       console.error('Scenario tick error', err.message);
       runtime.active = false;
       if (runtime.timer) clearTimeout(runtime.timer);
-      await Scenario.updateOne({ _id: runtime.scenario._id }, { status: 'stopped' });
+      await Scenario.updateOne(
+        { _id: runtime.scenario._id },
+        { status: 'stopped' }
+      );
       activeScenarios.delete(runtime.scenario._id.toString());
     }
   }, runtime.intervalMs);
@@ -444,7 +616,7 @@ function createRuntime(scenario, options) {
     farmInventory: [],
     cropCache: new Map(),
     sentEvents: 0,
-    stop: async updateStatus => {
+    stop: async (updateStatus) => {
       if (runtime.timer) {
         clearTimeout(runtime.timer);
         runtime.timer = null;
@@ -452,9 +624,12 @@ function createRuntime(scenario, options) {
       runtime.active = false;
       activeScenarios.delete(runtime.scenario._id.toString());
       if (updateStatus) {
-        await Scenario.updateOne({ _id: runtime.scenario._id }, { status: 'stopped' });
+        await Scenario.updateOne(
+          { _id: runtime.scenario._id },
+          { status: 'stopped' }
+        );
       }
-    }
+    },
   };
 
   runtime.start = async () => {
@@ -479,9 +654,14 @@ async function startScenario(input) {
   const batchSize = normalizeBatchSize(input.batchSize);
   const intervalMs = normalizeInterval(input.intervalMs);
   const probabilities = normalizeProbabilities(input.probabilities);
-  const startDateInput = input.startDate ? new Date(input.startDate) : new Date();
-  if (Number.isNaN(startDateInput.getTime())) throw new Error('Invalid startDate');
-  const durationMs = input.durationMinutes ? Math.max(0, Number(input.durationMinutes)) * 60000 : null;
+  const startDateInput = input.startDate
+    ? new Date(input.startDate)
+    : new Date();
+  if (Number.isNaN(startDateInput.getTime()))
+    throw new Error('Invalid startDate');
+  const durationMs = input.durationMinutes
+    ? Math.max(0, Number(input.durationMinutes)) * 60000
+    : null;
   const scenario = await Scenario.create({
     name,
     seed,
@@ -489,18 +669,18 @@ async function startScenario(input) {
     config: {
       batchSize,
       intervalMs,
-      regionFilter: Array.isArray(input.regions) ? input.regions : []
+      regionFilter: Array.isArray(input.regions) ? input.regions : [],
     },
     probabilities,
     status: 'running',
-    stats: { totalEventsSent: 0 }
+    stats: { totalEventsSent: 0 },
   });
   const runtime = createRuntime(scenario, {
     batchSize,
     intervalMs,
     probabilities,
     durationMs,
-    regionFilter: Array.isArray(input.regions) ? input.regions : []
+    regionFilter: Array.isArray(input.regions) ? input.regions : [],
   });
   activeScenarios.set(scenario._id.toString(), runtime);
   try {
@@ -547,5 +727,5 @@ module.exports = {
   startScenario,
   stopScenario,
   getScenarioStatus,
-  getScenarioEvents
+  getScenarioEvents,
 };

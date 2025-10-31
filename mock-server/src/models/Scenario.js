@@ -8,17 +8,22 @@ const ScenarioSchema = new mongoose.Schema(
     config: {
       batchSize: { type: Number, required: true },
       intervalMs: { type: Number, required: true },
-      regionFilter: [{ type: String }]
+      regionFilter: [{ type: String }],
     },
     probabilities: {
       farm: { type: Number, default: 0.7 },
       shipment: { type: Number, default: 0.25 },
-      ngo: { type: Number, default: 0.05 }
+      ngo: { type: Number, default: 0.05 },
     },
-    status: { type: String, enum: ['running', 'stopped'], default: 'running', index: true },
+    status: {
+      type: String,
+      enum: ['running', 'stopped'],
+      default: 'running',
+      index: true,
+    },
     stats: {
-      totalEventsSent: { type: Number, default: 0 }
-    }
+      totalEventsSent: { type: Number, default: 0 },
+    },
   },
   { timestamps: true }
 );

@@ -5,7 +5,8 @@ const scenarioRoutes = require('./routes/scenarioRoutes');
 const { MONGO_URI } = require('./config');
 
 const app = express();
-app.use(bodyParser.json({ limit: '2mb' }));
+
+app.use(bodyParser.json({ limit: '50mb' }));
 app.use('/api/scenario', scenarioRoutes);
 
 const port = process.env.PORT || 5001;
@@ -18,7 +19,7 @@ async function bootstrap() {
   });
 }
 
-bootstrap().catch(err => {
+bootstrap().catch((err) => {
   console.error('Startup error', err.message);
   process.exit(1);
 });
