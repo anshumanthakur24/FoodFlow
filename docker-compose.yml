@@ -1,0 +1,47 @@
+version: '3.9'
+
+services:
+  mongo:
+    image: mongo:7.0
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    environment:
+      MONGO_INITDB_DATABASE: arcanix
+    healthcheck:
+      test: ['CMD-SHELL', "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - mongo_data:/data/db
+
+  mock-server:
+    build:
+      context: ./mock-server
+    restart: unless-stopped
+    ports:
+      - '5001:5001'
+    environment:
+      PORT: 5001
+      MONGO_URI: mongodb://mongo:27017/arcanix
+      MONGO_DB: arcanix
+      MAIN_API_URL: http://host.docker.internal:4000
+      MAIN_API_FARM_PATH: /api/farm-events
+      MAIN_API_SHIPMENTS_PATH: /api/shipments
+      MAIN_API_REQUESTS_PATH: /api/requests
+      SCENARIO_MAX_BATCH_SIZE: 200
+      SCENARIO_MIN_INTERVAL_MS: 500
+      SCENARIO_PROB_FARM: 0.7
+      SCENARIO_PROB_SHIPMENT: 0.25
+      SCENARIO_PROB_NGO: 0.05
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - mock_data_cache:/app/mock-data/crop-generation-data
+
+volumes:
+  mongo_data:
+  mock_data_cache:
