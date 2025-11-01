@@ -48,6 +48,13 @@ West Bengal,Kolkata,182000,2024-04-01
 > - Per-capita income: Reserve Bank of India "Handbook of Statistics on the Indian States" (state-wise Net State Domestic Product) or MOSPI District Domestic Product datasets (CSV via https://www.mospi.gov.in/). Export as CSV with rupee values.
 > - Festival participation: Census-based cultural participation studies (e.g. National Sample Survey 75th round) or curated datasets from IHDS / Pew Research (export to CSV with estimated celebration percentages per district). Document the provenance in version control for auditability.
 
+## Data sources
+
+- **Operational history (MongoDB)** – The Main API (`Server/`) persists nodes, batches, shipments, and requests inside the Mongo database you point to via `MONGODB_URI`. Run the production system or the provided simulator (`mock-server/`) to generate realistic traffic before training.
+- **Festival participation CSV** – Curate participation percentages from NSS, IHDS, Pew, or state tourism departments and export to the format shown above (`data/festival_features.csv`).
+- **Income CSV** – Pull state/district Net or Gross Domestic Product per capita from MOSPI or RBI tables; normalize to rupees per person and store in `data/income_features.csv`.
+- **Optional enrichments** – You can extend the schema with weather, commodity price indices, or census population—add columns in the CSVs and update feature engineering accordingly.
+
 ## Running a training job
 
 ```powershell
@@ -73,6 +80,17 @@ Every training run creates a timestamped folder inside `ML_OUTPUT_DIR` (default 
 - Persist `cluster_id` with predictions so logistics teams can tailor playbooks per cluster.
 - Re-train weekly or when significant festival/income data updates are ingested.
 - Add automated tests using stored fixtures once real production data is seeded into the database.
+
+### One-command training script (Windows PowerShell)
+
+```powershell
+cd "e:/Projects/Complete/Arcanix Hack on Hills/ml"
+.\scripts\start-training.ps1 -StartDate 2023-01-01 -EndDate 2024-10-31 -Freq M
+```
+
+- The script bootstraps the virtual environment (creating `.venv` if missing), installs dependencies, ensures `.env` exists, and executes `python -m src.train`.
+- Use `-SkipDeps` to skip the dependency install step on subsequent runs.
+- Omitting `-Freq` falls back to `ML_FEATURE_FREQ` from the `.env` file (defaults to monthly `M`).
 
 ## Node.js inference gateway
 
@@ -104,6 +122,69 @@ The API exposes:
 When `runId` is omitted, the server picks the latest run directory (lexicographically).
 
 > The payload should include the numeric feature columns generated during training (fields missing from a record are treated as `0`).
+
+### Transfer planning
+
+- `POST /transfers/plan` – computes recommended transfers between warehouses and from farms to warehouses, then augments each leg with map coordinates spaced roughly every 5 km using the OSRM public routing API (override via `ROUTE_SERVICE_URL`).
+- Optional request body fields:
+  - `mode`: `"warehouse_to_warehouse"`, `"farm_to_warehouse"`, or `"all"` (default).
+  - `maxPairs`, `minTransferKg`, `overstockRatio`, `understockRatio`, `targetRatio` to tune heuristics.
+  - `filters`: `{ "states": [], "districts": [], "types": [], "nodeIds": [], "regions": [] }` for geographic scoping.
+  - `intervalKm`: override the sampling interval for returned coordinates (default `5`).
+
+Example request:
+
+```http
+POST /transfers/plan
+Content-Type: application/json
+
+{
+   "mode": "all",
+   "maxPairs": 3,
+   "intervalKm": 5,
+   "filters": { "states": ["maharashtra"] }
+}
+```
+
+Example response (abridged):
+
+```json
+{
+  "generated_at": "2025-11-01T06:29:00.112Z",
+  "counts": { "warehouse_to_warehouse": 2, "farm_to_warehouse": 1 },
+  "warehouse_to_warehouse": [
+    {
+      "type": "warehouse_to_warehouse",
+      "suggested_quantity_kg": 420.5,
+      "distance_km": 38.7,
+      "source": {
+        "nodeId": "WH-008",
+        "utilization_pct": 92.1,
+        "projected_utilization_pct": 65.4,
+        "location": { "lat": 18.58, "lon": 73.77 }
+      },
+      "target": {
+        "nodeId": "WH-014",
+        "utilization_pct": 21.6,
+        "projected_utilization_pct": 48.2,
+        "location": { "lat": 18.45, "lon": 73.86 }
+      },
+      "route": {
+        "provider": "osrm",
+        "distanceKm": 41.2,
+        "durationMinutes": 54.8,
+        "points": [
+          { "lat": 18.58, "lon": 73.77, "cumulativeKm": 0 },
+          { "lat": 18.53, "lon": 73.81, "cumulativeKm": 5 },
+          { "lat": 18.45, "lon": 73.86, "cumulativeKm": 41.2 }
+        ]
+      }
+    }
+  ]
+}
+```
+
+> ⚠️ The default OSRM endpoint is shared and rate-limited; for higher throughput host your own instance and point `ROUTE_SERVICE_URL` to it.
 
 Example request:
 

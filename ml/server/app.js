@@ -8,6 +8,7 @@ const {
   readMetadata,
 } = require('./utils/artifacts');
 const { runInference } = require('./services/pythonRunner');
+const { planTransfers } = require('./services/transferPlanner');
 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
@@ -20,6 +21,7 @@ app.get('/health', async (req, res, next) => {
       artifactsDir: config.artifactsDir,
       availableRuns: runs,
       pythonBin: config.pythonBin,
+      routeServiceUrl: config.routeServiceUrl,
     });
   } catch (error) {
     next(error);
@@ -88,6 +90,41 @@ app.post('/predict', async (req, res, next) => {
     });
 
     return res.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/transfers/plan', async (req, res, next) => {
+  try {
+    const {
+      mode,
+      maxPairs,
+      minTransferKg,
+      overstockRatio,
+      understockRatio,
+      targetRatio,
+      intervalKm,
+      filters,
+    } = req.body || {};
+
+    const plan = await planTransfers({
+      pythonBin: config.pythonBin,
+      cwd: config.rootDir,
+      options: {
+        mode,
+        maxPairs,
+        minTransferKg,
+        overstockRatio,
+        understockRatio,
+        targetRatio,
+      },
+      payload: { ...(req.body || {}), filters: filters || {} },
+      intervalKm,
+      routeServiceUrl: config.routeServiceUrl,
+    });
+
+    return res.json(plan);
   } catch (error) {
     next(error);
   }

@@ -14,10 +14,13 @@ const resolvePath = (target) => {
 };
 
 const artifactsDir = resolvePath(process.env.ML_OUTPUT_DIR || 'artifacts');
+const routeServiceUrl =
+  process.env.ROUTE_SERVICE_URL || 'https://router.project-osrm.org';
 
 module.exports = {
   rootDir: ROOT_DIR,
   pythonBin: process.env.PYTHON_BIN || 'python',
   artifactsDir,
   port: Number(process.env.ML_SERVER_PORT || 5050),
+  routeServiceUrl,
 };
