@@ -3,6 +3,12 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Event } from "../models/event.model.js";
 import { Request } from "../models/request.model.js";
+import { Event } from "../models/event.model.js";
+import { Request } from "../models/request.model.js";
+import { Node } from "../models/node.model.js";
+import { Batch } from "../models/batch.model.js";
+import { NGO } from "../models/NGO.model.js";
+import mongoose from "mongoose";
 
 const storeEvent = asyncHandler(async (req, res) => {
   try {
@@ -40,20 +46,22 @@ const storeEvent = asyncHandler(async (req, res) => {
 
     // 🟩 FARM PRODUCTION EVENT
     if (type === "farm_production") {
-      const { emittedFrom, quantity_kg } = payload;
+      const { node, quantity_kg } = payload;
 
-      if (!emittedFrom || !emittedFrom.nodeId) {
+      if (!node || !node.nodeId) {
+        console.log(payload);
+
         throw new ApiError(
           400,
           "Missing 'emittedFrom.nodeId' in payload for 'farm_production'."
         );
       }
 
-      const nodeDoc = await Node.findOne({ name: emittedFrom.nodeId });
+      const nodeDoc = await Node.findOne({ _id: node.nodeId });
       if (!nodeDoc) {
         throw new ApiError(
           404,
-          `No Node found for emittedFrom.nodeId '${emittedFrom.nodeId}'.`
+          `No Node found for node.nodeId '${node.nodeId}'.`
         );
       }
 
@@ -82,13 +90,13 @@ const storeEvent = asyncHandler(async (req, res) => {
             action: "created",
             from: nodeDoc._id,
             to: nodeDoc._id,
-            note: `Batch created from ${emittedFrom.nodeId} (${emittedFrom.type}).`,
+            note: `Batch created from ${node.nodeId} (${node.type}).`,
           },
         ],
         metadata: {
-          district: emittedFrom.district,
-          state: emittedFrom.state,
-          coordinates: emittedFrom.location || {},
+          district: node.district,
+          state: node.state,
+          coordinates: node.location || {},
         },
         status: "stored",
       });

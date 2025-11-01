@@ -8,20 +8,19 @@ const batchSchema = new mongoose.Schema({
     },
     foodType: {
         type: String,
-        required: true
+
     },
     quantity_kg: {
         type: Number,
-        required: true
+        
     },
     original_quantity_kg: {
         type: Number,
-        required: true
+        
     },
     originNode: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Node',
-        required: true
     },
     currentNode: {
         type: mongoose.Schema.Types.ObjectId,
