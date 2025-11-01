@@ -100,16 +100,16 @@ const deleteNode = asyncHandler(async (req, res) => {
 
 const getNodesByRegion = asyncHandler(async (req, res) => {
   try {
-    const { regionId } = req.params;
+    const { district } = req.params;
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;
 
-    if (!regionId) {
-      throw new ApiError(400, "Please provide a valid 'regionId'.");
+    if (!district) {
+      throw new ApiError(400, "Please provide a valid 'district'.");
     }
 
-    const totalNodes = await Node.countDocuments({ regionId });
+    const totalNodes = await Node.countDocuments({ district });
 
     if (totalNodes === 0) {
       return res.status(200).json(
@@ -124,12 +124,12 @@ const getNodesByRegion = asyncHandler(async (req, res) => {
               limit,
             },
           },
-          `No nodes found for region '${regionId}'.`
+          `No nodes found for district '${district}'.`
         )
       );
     }
 
-    const nodes = await Node.find({ regionId })
+    const nodes = await Node.find({ district })
       .sort({ name: 1 }) // optional sorting
       .skip(skip)
       .limit(limit);
@@ -140,7 +140,7 @@ const getNodesByRegion = asyncHandler(async (req, res) => {
       new ApiResponse(
         200,
         {
-          regionId,
+          district,
           count: nodes.length,
           totalNodes,
           pagination: {
@@ -158,7 +158,7 @@ const getNodesByRegion = asyncHandler(async (req, res) => {
     else
       throw new ApiError(
         500,
-        "Failed to fetch nodes for region.",
+        "Failed to fetch nodes for district.",
         [error.message],
         error.stack
       );
