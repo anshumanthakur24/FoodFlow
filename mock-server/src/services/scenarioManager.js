@@ -622,7 +622,6 @@ async function postJson(url, body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAIN_API_TIMEOUT_MS);
   try {
-    console.log("url", url);
     
     const response = await fetchApi(url, {
       method: 'POST',
@@ -630,14 +629,14 @@ async function postJson(url, body) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    console.log("response", response);
+   
     
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       console.error('Main API error', response.status, text);
     }
   } catch (err) {
-    console.error('Main API error', err);
+    console.error('Main API error', err.message,url);
   } finally {
     clearTimeout(timeout);
   }

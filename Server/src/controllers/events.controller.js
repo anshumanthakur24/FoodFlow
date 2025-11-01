@@ -1,6 +1,8 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import {ApiError} from "../utils/ApiError.js"
 import { ApiResponse } from "../utils/ApiResponse.js";
+import {Event} from "../models/event.model.js";
+import {Request} from "../models/request.model.js";
 
 const storeEvent = asyncHandler(async (req, res) => {   
     try {
@@ -125,7 +127,7 @@ const createNGORequest = asyncHandler(async (req, res) => {
 
 
 const newShipment = asyncHandler(async (req, res) => {
-    return res.res
+    return res
             .status(500)
             .json(
                 new ApiResponse(

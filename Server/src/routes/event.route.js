@@ -1,11 +1,11 @@
 import { Router } from "express";
-import {storeEvent,newNGORequest,newShipment} from "../controllers/events.controller.js";
+import {storeEvent,createNGORequest,newShipment} from "../controllers/events.controller.js";
 //import controllers
 
 const router=Router();
 
 router.post("/farm", storeEvent);
-router.post("/request", newNGORequest);
+router.post("/request", createNGORequest);
 router.post("/shipment", newShipment);
 
 

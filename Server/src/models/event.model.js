@@ -7,7 +7,7 @@ const eventSchema = new mongoose.Schema({
         unique: true
     },
     time: {
-        type: Timestamp,
+        type: Date,
         required: true
     },
     type: {
