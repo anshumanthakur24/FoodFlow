@@ -45,7 +45,7 @@ def load_config() -> TrainingConfig:
         mongo_uri=os.getenv("MONGODB_URI", "mongodb://localhost:27017/food_net"),
         mongo_db=os.getenv("MONGODB_DB_NAME"),
         feature_frequency=os.getenv("ML_FEATURE_FREQ", "W"),
-        output_dir=os.getenv("ML_OUTPUT_DIR", "ml/artifacts"),
+    output_dir=os.getenv("ML_OUTPUT_DIR", "artifacts"),
         kmeans_clusters=_get_env_int("ML_KMEANS_CLUSTERS", 6),
         isolation_contamination=_get_env_float("ML_IFOREST_CONTAMINATION", 0.05),
         random_state=_get_env_int("ML_RANDOM_STATE", 42),

@@ -60,7 +60,7 @@ python -m src.train --start-date 2023-01-01 --end-date 2024-10-31 --freq M
 
 ## Outputs
 
-Every training run creates a timestamped folder inside `ML_OUTPUT_DIR` (default `ml/artifacts/`). It contains:
+Every training run creates a timestamped folder inside `ML_OUTPUT_DIR` (default `artifacts/`). It contains:
 
 - `kmeans_model.joblib` and `isolation_forest_model.joblib` – serialized scikit-learn pipelines.
 - `aggregated_features.csv` – engineered features for each `(state, district, period)` row.
@@ -73,3 +73,74 @@ Every training run creates a timestamped folder inside `ML_OUTPUT_DIR` (default 
 - Persist `cluster_id` with predictions so logistics teams can tailor playbooks per cluster.
 - Re-train weekly or when significant festival/income data updates are ingested.
 - Add automated tests using stored fixtures once real production data is seeded into the database.
+
+## Node.js inference gateway
+
+The `server` directory contains an Express service that wraps the Python models so the rest of the stack can keep using Node APIs.
+
+### Setup
+
+```powershell
+cd "e:/Projects/Complete/Arcanix Hack on Hills/ml"
+npm install
+```
+
+- The server uses the same `.env` file as the training pipeline. Ensure `ML_OUTPUT_DIR` points to the folder with your trained runs (relative paths are resolved from the `ml` directory) and optionally override `ML_SERVER_PORT` or `PYTHON_BIN`.
+- The service will execute `python -m src.infer` under the hood, so the Python virtual environment must be activated (or `PYTHON_BIN` must point to it).
+
+### Running
+
+```powershell
+npm run start
+```
+
+The API exposes:
+
+- `GET /health` – current configuration and detected run folders.
+- `GET /runs` – lists available training run IDs (timestamped directory names).
+- `GET /runs/:runId/metadata` – returns the stored metadata for a specific run.
+- `POST /predict` – body `{ "records": [ { ...feature columns... } ], "runId": "optional" }`.
+
+When `runId` is omitted, the server picks the latest run directory (lexicographically).
+
+> The payload should include the numeric feature columns generated during training (fields missing from a record are treated as `0`).
+
+Example request:
+
+```http
+POST /predict
+Content-Type: application/json
+
+{
+   "records": [
+      {
+         "state": "Maharashtra",
+         "district": "Pune",
+         "period_start": "2024-10-01",
+         "requested_kg": 1250,
+         "incoming_kg": 980,
+         "outgoing_kg": 450,
+         "produced_kg": 1100,
+         "request_status_open": 4,
+         "request_status_fulfilled": 3
+      }
+   ]
+}
+```
+
+Response (truncated):
+
+```json
+{
+   "count": 1,
+   "results": [
+      {
+         "state": "Maharashtra",
+         "district": "Pune",
+         "cluster_id": 2,
+         "anomaly_score": 0.17,
+         "is_anomaly": 0
+      }
+   ]
+}
+```
