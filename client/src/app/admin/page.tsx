@@ -2,13 +2,17 @@
 
 import React, { useState, useCallback } from "react";
 
+const API_BASE_URL = "http://localhost:4000/api/v1/node";
+
 interface Node {
   id: string;
   nodeId: string;
   type: "farm" | "warehouse" | "ngo" | "processing";
   name: string;
   regionId: string;
+  district: string;
   location: {
+    type: string;
     coordinates: [number, number];
   };
   capacity_kg?: number;
@@ -34,7 +38,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "farm",
       name: "Green Valley Farm",
       regionId: "Mumbai",
-      location: { coordinates: [72.8777, 19.076] },
+      district: "Mumbai",
+      location: { type: "Point", coordinates: [72.8777, 19.076] },
       capacity_kg: 5000,
       contact: "+91 98765 43210",
     },
@@ -44,7 +49,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "warehouse",
       name: "Central Storage Facility",
       regionId: "Mumbai",
-      location: { coordinates: [72.8311, 18.9388] },
+      district: "Mumbai",
+      location: { type: "Point", coordinates: [72.8311, 18.9388] },
       capacity_kg: 50000,
       contact: "+91 98765 43211",
     },
@@ -54,7 +60,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "ngo",
       name: "Food For All Mumbai",
       regionId: "Mumbai",
-      location: { coordinates: [72.8479, 19.0176] },
+      district: "Mumbai",
+      location: { type: "Point", coordinates: [72.8479, 19.0176] },
       contact: "+91 98765 43212",
     },
   ],
@@ -65,7 +72,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "farm",
       name: "Capital Organic Farm",
       regionId: "Delhi",
-      location: { coordinates: [77.1025, 28.7041] },
+      district: "Delhi",
+      location: { type: "Point", coordinates: [77.1025, 28.7041] },
       capacity_kg: 3000,
       contact: "+91 98765 43213",
     },
@@ -75,7 +83,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "warehouse",
       name: "North Delhi Warehouse",
       regionId: "Delhi",
-      location: { coordinates: [77.2315, 28.6139] },
+      district: "Delhi",
+      location: { type: "Point", coordinates: [77.2315, 28.6139] },
       capacity_kg: 40000,
       contact: "+91 98765 43214",
     },
@@ -88,6 +97,8 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<string>("all");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [allNodes, setAllNodes] = useState<Record<string, Node[]>>(MOCK_DATA);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Form state for new node
   const [newNode, setNewNode] = useState({
@@ -100,18 +111,58 @@ export default function AdminDashboard() {
     longitude: "",
   });
 
-  const handleDistrictChange = useCallback(
-    (district: string) => {
-      setSelectedDistrict(district);
-      if (district) {
-        setFilteredNodes(allNodes[district] || []);
-      } else {
-        setFilteredNodes([]);
+  const handleDistrictChange = useCallback(async (district: string) => {
+    setSelectedDistrict(district);
+    setError(null);
+
+    if (!district) {
+      setFilteredNodes([]);
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/region/${district}?limit=1000`
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch nodes: ${response.statusText}`);
       }
-      setActiveTab("all");
-    },
-    [allNodes]
-  );
+
+      const result = await response.json();
+
+      // Backend returns: { data: { nodes: [...], count, totalNodes, pagination }, message, success }
+      const nodes: Node[] = result.data.nodes.map((node: any) => ({
+        id: node._id,
+        nodeId: node.nodeId || node._id,
+        type: node.type,
+        name: node.name,
+        regionId: node.regionId,
+        district: node.district,
+        location: node.location,
+        capacity_kg: node.capacity_kg,
+        contact: node.contact,
+      }));
+
+      setFilteredNodes(nodes);
+
+      // Update allNodes cache
+      setAllNodes((prev) => ({
+        ...prev,
+        [district]: nodes,
+      }));
+    } catch (err) {
+      console.error("Error fetching nodes:", err);
+      setError(err instanceof Error ? err.message : "Failed to fetch nodes");
+      setFilteredNodes([]);
+    } finally {
+      setIsLoading(false);
+    }
+
+    setActiveTab("all");
+  }, []);
 
   const farms = filteredNodes.filter((node) => node.type === "farm");
   const warehouses = filteredNodes.filter((node) => node.type === "warehouse");
@@ -136,8 +187,9 @@ export default function AdminDashboard() {
   const displayNodes = getDisplayNodes();
 
   // Handle form submission
-  const handleAddNode = (e: React.FormEvent) => {
+  const handleAddNode = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
 
     if (
       !newNode.name ||
@@ -149,90 +201,144 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Generate new node ID
-    const typePrefix = newNode.type.toUpperCase().substring(0, 2);
-    const existingNodes = Object.values(allNodes).flat();
-    const maxId = existingNodes.reduce(
-      (max, node) => Math.max(max, parseInt(node.id) || 0),
-      0
-    );
-    const newId = (maxId + 1).toString();
-    const nodeIdCounter =
-      existingNodes.filter((n) => n.type === newNode.type).length + 1;
-    const newNodeId = `${typePrefix}${String(nodeIdCounter).padStart(3, "0")}`;
+    setIsLoading(true);
 
-    const createdNode: Node = {
-      id: newId,
-      nodeId: newNodeId,
-      type: newNode.type,
-      name: newNode.name,
-      regionId: newNode.regionId,
-      location: {
-        coordinates: [
-          parseFloat(newNode.longitude),
-          parseFloat(newNode.latitude),
-        ],
-      },
-      capacity_kg: newNode.capacity_kg
-        ? parseInt(newNode.capacity_kg)
-        : undefined,
-      contact: newNode.contact || undefined,
-    };
+    try {
+      // Prepare data in backend format
+      const nodeData = {
+        type: newNode.type,
+        name: newNode.name,
+        regionId: newNode.regionId,
+        district: newNode.regionId, // Using regionId as district
+        location: {
+          type: "Point",
+          coordinates: [
+            parseFloat(newNode.longitude),
+            parseFloat(newNode.latitude),
+          ],
+        },
+        capacity_kg: newNode.capacity_kg ? parseInt(newNode.capacity_kg) : 0,
+        contact: newNode.contact || null,
+      };
 
-    // Add to allNodes
-    const updatedNodes = { ...allNodes };
-    if (!updatedNodes[newNode.regionId]) {
-      updatedNodes[newNode.regionId] = [];
+      const response = await fetch(`${API_BASE_URL}/addNewNode`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(nodeData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `Failed to create node: ${response.statusText}`
+        );
+      }
+
+      const result = await response.json();
+      const createdNode = result.data;
+
+      // Convert to frontend format
+      const frontendNode: Node = {
+        id: createdNode._id,
+        nodeId: createdNode.nodeId || createdNode._id,
+        type: createdNode.type,
+        name: createdNode.name,
+        regionId: createdNode.regionId,
+        district: createdNode.district,
+        location: createdNode.location,
+        capacity_kg: createdNode.capacity_kg,
+        contact: createdNode.contact,
+      };
+
+      // Update allNodes cache
+      const updatedNodes = { ...allNodes };
+      if (!updatedNodes[newNode.regionId]) {
+        updatedNodes[newNode.regionId] = [];
+      }
+      updatedNodes[newNode.regionId] = [
+        ...updatedNodes[newNode.regionId],
+        frontendNode,
+      ];
+      setAllNodes(updatedNodes);
+
+      // Update filtered nodes if same district
+      if (selectedDistrict === newNode.regionId) {
+        setFilteredNodes(updatedNodes[newNode.regionId]);
+      }
+
+      // Reset form and close modal
+      setNewNode({
+        type: "farm",
+        name: "",
+        regionId: "",
+        capacity_kg: "",
+        contact: "",
+        latitude: "",
+        longitude: "",
+      });
+      setIsAddModalOpen(false);
+
+      alert(
+        `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} "${createdNode.name}" added successfully!`
+      );
+    } catch (err) {
+      console.error("Error adding node:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to add node";
+      setError(errorMessage);
+      alert(`❌ Error: ${errorMessage}`);
+    } finally {
+      setIsLoading(false);
     }
-    updatedNodes[newNode.regionId] = [
-      ...updatedNodes[newNode.regionId],
-      createdNode,
-    ];
-    setAllNodes(updatedNodes);
-
-    // Update filtered nodes if same district
-    if (selectedDistrict === newNode.regionId) {
-      setFilteredNodes(updatedNodes[newNode.regionId]);
-    }
-
-    // Reset form and close modal
-    setNewNode({
-      type: "farm",
-      name: "",
-      regionId: "",
-      capacity_kg: "",
-      contact: "",
-      latitude: "",
-      longitude: "",
-    });
-    setIsAddModalOpen(false);
-
-    alert(
-      `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} added successfully!`
-    );
   };
 
   // Handle delete node
-  const handleDeleteNode = (nodeId: string, nodeName: string) => {
+  const handleDeleteNode = async (nodeId: string, nodeName: string) => {
     if (!confirm(`Are you sure you want to delete "${nodeName}"?`)) {
       return;
     }
 
-    // Remove from allNodes
-    const updatedNodes = { ...allNodes };
-    Object.keys(updatedNodes).forEach((district) => {
-      updatedNodes[district] = updatedNodes[district].filter(
-        (node) => node.id !== nodeId
-      );
-    });
-    setAllNodes(updatedNodes);
+    setIsLoading(true);
+    setError(null);
 
-    // Update filtered nodes if viewing that district
-    if (selectedDistrict) {
-      setFilteredNodes(updatedNodes[selectedDistrict] || []);
+    try {
+      const response = await fetch(`${API_BASE_URL}/deleteNode/${nodeId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `Failed to delete node: ${response.statusText}`
+        );
+      }
+
+      // Remove from allNodes cache
+      const updatedNodes = { ...allNodes };
+      Object.keys(updatedNodes).forEach((district) => {
+        updatedNodes[district] = updatedNodes[district].filter(
+          (node) => node.id !== nodeId
+        );
+      });
+      setAllNodes(updatedNodes);
+
+      // Update filtered nodes if viewing that district
+      if (selectedDistrict) {
+        setFilteredNodes(updatedNodes[selectedDistrict] || []);
+      }
+
+      alert(`🗑️ "${nodeName}" deleted successfully!`);
+    } catch (err) {
+      console.error("Error deleting node:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to delete node";
+      setError(errorMessage);
+      alert(`❌ Error: ${errorMessage}`);
+    } finally {
+      setIsLoading(false);
     }
-
-    alert(`🗑️ "${nodeName}" deleted successfully!`);
   };
 
   return (
@@ -334,7 +440,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {selectedDistrict && filteredNodes.length > 0 && (
+        {selectedDistrict && filteredNodes.length > 0 && !isLoading && (
           <>
             <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
               <button
@@ -549,11 +655,51 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {selectedDistrict && filteredNodes.length === 0 && (
+        {selectedDistrict &&
+          filteredNodes.length === 0 &&
+          !isLoading &&
+          !error && (
+            <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+              <div className="text-center">
+                <svg
+                  className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.5}
+                    d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                  />
+                </svg>
+                <h3 className="mt-4 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                  No nodes found
+                </h3>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  No facilities registered in {selectedDistrict}
+                </p>
+              </div>
+            </div>
+          )}
+
+        {selectedDistrict && isLoading && (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-center">
+              <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-zinc-200 border-t-zinc-900 dark:border-zinc-800 dark:border-t-zinc-100"></div>
+              <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+                Loading nodes...
+              </p>
+            </div>
+          </div>
+        )}
+
+        {selectedDistrict && error && !isLoading && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/30">
+            <div className="flex items-start gap-3">
               <svg
-                className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600"
+                className="h-5 w-5 text-red-600 dark:text-red-400"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -561,16 +707,24 @@ export default function AdminDashboard() {
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                  strokeWidth={2}
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <h3 className="mt-4 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                No facilities found
-              </h3>
-              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                No facilities registered in {selectedDistrict}
-              </p>
+              <div className="flex-1">
+                <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+                  Error loading nodes
+                </h3>
+                <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                  {error}
+                </p>
+                <button
+                  onClick={() => handleDistrictChange(selectedDistrict)}
+                  className="mt-2 text-sm font-medium text-red-800 hover:text-red-900 dark:text-red-200 dark:hover:text-red-100"
+                >
+                  Try again
+                </button>
+              </div>
             </div>
           </div>
         )}
