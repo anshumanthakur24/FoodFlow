@@ -630,6 +630,13 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
     MAIN_API_ROUTES.requestApproveTemplate,
     ledgerEntry.requestId
   );
+  if (!urlPath) return null;
+
+  const recordPayload = {
+    ...payload,
+    history: [...ledgerEntry.history],
+    metadata,
+  };
 
   return {
     type: 'requestApproved',
@@ -637,7 +644,7 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
     record: {
       scenarioId: runtime.scenario._id,
       type: 'requestApproved',
-      payload: { ...payload, metadata },
+      payload: recordPayload,
       tickIndex: runtime.tickIndex,
       timestamp: acceptanceTimestamp,
     },
@@ -696,6 +703,13 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     MAIN_API_ROUTES.requestFulfillTemplate,
     ledgerEntry.requestId
   );
+  if (!urlPath) return null;
+
+  const recordPayload = {
+    ...payload,
+    history: [...ledgerEntry.history],
+    metadata,
+  };
 
   return {
     type: 'requestFulfilled',
@@ -703,7 +717,7 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     record: {
       scenarioId: runtime.scenario._id,
       type: 'requestFulfilled',
-      payload: { ...payload, metadata },
+      payload: recordPayload,
       tickIndex: runtime.tickIndex,
       timestamp: fulfillmentTimestamp,
     },
