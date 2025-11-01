@@ -37,6 +37,10 @@ Any unset value falls back to the defaults above.
 
 Start a deterministic simulation.
 
+There are two ways to scope where events are emitted from:
+
+1. Provide `nodes` directly (preferred). Each item should match `Server/src/models/node.model.js` shape (at least `nodeId`, `type`, `district`, optional `state`, and `location.coordinates` as `[lon, lat]`).
+
 ```json
 {
   "name": "HarvestRun-1",
@@ -44,15 +48,28 @@ Start a deterministic simulation.
   "startDate": "2025-11-01T00:00:00Z",
   "batchSize": 20,
   "intervalMs": 2000,
-  "regions": ["Andhra Pradesh"],
+  "nodes": [
+    {
+      "nodeId": "FARM-001",
+      "type": "farm",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "location": { "type": "Point", "coordinates": [73.86, 18.52] }
+    },
+    {
+      "nodeId": "WH-001",
+      "type": "warehouse",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "location": { "type": "Point", "coordinates": [73.9, 18.55] }
+    }
+  ],
   "durationMinutes": 5,
-  "probabilities": {
-    "farm": 0.6,
-    "shipment": 0.3,
-    "ngo": 0.1
-  }
+  "probabilities": { "farm": 0.7, "shipment": 0.25, "ngo": 0.05 }
 }
 ```
+
+2. Legacy: provide `regions` and the simulator will resolve regions/warehouses from Mongo.
 
 Returns: `{ "scenarioId": string, "status": "running" }`
 
@@ -76,6 +93,25 @@ Retrieve scenario metadata, status, configuration, and stats.
 
 Fetch recent events persisted in MongoDB (`sim_events`). `limit` defaults to 100 and is capped at 500.
 
+All emitted events now include an `emittedFrom` object inside the payload with the source node details:
+
+```json
+{
+  "type": "farm",
+  "payload": {
+    "emittedFrom": {
+      "nodeId": "FARM-001",
+      "type": "farm",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "location": { "lat": 18.52, "lon": 73.86 }
+    },
+    "batch": { "batchId": "...", "quantity_kg": 2500 },
+    "quantity_kg": 2500
+  }
+}
+```
+
 ## Docker
 
 Build and launch the mock server alongside MongoDB with seeded reference data:
@@ -85,3 +121,27 @@ Build and launch the mock server alongside MongoDB with seeded reference data:
 3. Interact with the API at `http://localhost:5001` once the "Starting Scenario Manager" log appears.
 
 The compose setup exposes an optional `MONGO_DB` environment variable that defaults to the database parsed from `MONGO_URI`. Setting `SKIP_DATA_SETUP=1` on the `mock-server` service skips the Python loaders if you already have seeded data.
+
+## Generate nodes from states/districts
+
+Use the helper to create farm/warehouse nodes ready for MongoDB:
+
+```powershell
+cd "e:/Projects/Complete/Arcanix Hack on Hills/mock-server/mock-data"
+
+# From Mongo (example: agriculte.crops_history)
+node .\generate-nodes.js --from-mongo --mongo-uri "mongodb://127.0.0.1:27017/agriculte" --mongo-coll crops_history --output nodes.mongo.json
+
+# From CSV
+node .\generate-nodes.js --input ..\..\ml\data\census2011.csv --states Maharashtra,Gujarat --output nodes.csv.json
+
+# Import
+mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file "nodes.mongo.json"
+```
+
+Flags:
+
+- `--from-mongo` to load unique `(state,district)` from a collection.
+- `--mongo-uri`, `--mongo-db` (if not in URI), `--mongo-coll` (default `crops_history`).
+- `--state-field`, `--district-field` (defaults `state`, `district`).
+- `--min`, `--max` nodes per district (min effectively 6 to guarantee ≥3 of each type).

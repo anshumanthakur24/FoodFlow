@@ -60,11 +60,20 @@ app.get('/runs/:runId/metadata', async (req, res, next) => {
 
 app.post('/predict', async (req, res, next) => {
   try {
-    const { records, runId } = req.body || {};
-    if (!Array.isArray(records) || !records.length) {
-      return res
-        .status(400)
-        .json({ error: 'Provide a non-empty array of records' });
+    const { runId } = req.body || {};
+    const hasServerPayload =
+      req.body &&
+      (Array.isArray(req.body.nodes) ||
+        Array.isArray(req.body.requests) ||
+        Array.isArray(req.body.shipments) ||
+        Array.isArray(req.body.batches));
+    const hasRecords =
+      Array.isArray(req.body?.records) && req.body.records.length > 0;
+    if (!hasRecords && !hasServerPayload) {
+      return res.status(400).json({
+        error:
+          "Provide either 'records' (non-empty array of feature rows) or raw Server data: nodes/requests/shipments/batches.",
+      });
     }
 
     let runDir;
@@ -86,7 +95,7 @@ app.post('/predict', async (req, res, next) => {
       pythonBin: config.pythonBin,
       cwd: config.rootDir,
       modelDir: runDir,
-      records,
+      payload: hasServerPayload ? req.body : { records: req.body.records },
     });
 
     return res.json(payload);
