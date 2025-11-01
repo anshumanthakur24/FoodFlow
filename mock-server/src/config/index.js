@@ -6,11 +6,11 @@ if (fs.existsSync(envPath)) {
   require('dotenv').config({ path: envPath });
 }
 
-const MAIN_API_URL = process.env.MAIN_API_URL || 'http://localhost:4000';
+const MAIN_API_URL = process.env.MAIN_API_URL || 'http://localhost:3001';
 const MAIN_API_ROUTES = {
-  farm: process.env.MAIN_API_FARM_PATH || '/api/farm-events',
-  shipment: process.env.MAIN_API_SHIPMENTS_PATH || '/api/shipments',
-  ngo: process.env.MAIN_API_REQUESTS_PATH || '/api/requests',
+  farm: process.env.MAIN_API_FARM_PATH || '/api/v1/event/farm',
+  shipment: process.env.MAIN_API_SHIPMENTS_PATH || '/api/v1/event/shipment',
+  ngo: process.env.MAIN_API_REQUESTS_PATH || '/api/v1/event/request',
 };
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/arcanix';
 const MAX_BATCH_SIZE = Number(process.env.SCENARIO_MAX_BATCH_SIZE || 200);

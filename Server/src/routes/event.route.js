@@ -1,5 +1,5 @@
 import { Router } from "express";
-import {newFarmData,newNGORequest,newShipment} from "../controllers/events.controller";
+import {newFarmData,newNGORequest,newShipment} from "../controllers/events.controller.js";
 //import controllers
 
 const router=Router();
