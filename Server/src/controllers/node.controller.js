@@ -261,4 +261,63 @@ const getAllDistricts = asyncHandler(async (req, res) => {
       );
   }
 });
-export { createNode, deleteNode, getNodesByRegion, getAllNodes,getAllDistricts };
+
+const startScenario = asyncHandler(async (req, res) => {
+  try {
+    const baseURL = process.env.SCENARIO_BASE_URL || req.body.baseURL;
+    if (!baseURL) {
+      throw new ApiError(400, "Missing 'baseURL'. Please provide the target endpoint base URL.");
+    }
+
+    const endpoint = `${baseURL}/scenario/start`;
+
+    const nodes = await Node.find();
+    if (nodes.length === 0) {
+      throw new ApiError(404, "No nodes found in the database to send.");
+    }
+
+    const payload = { nodes };
+
+    const response = await axios.post(endpoint, payload, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 10000 
+    });
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          sentNodes: nodes.length,
+          externalResponse: response.data
+        },
+        "Scenario started successfully and nodes sent."
+      )
+    );
+
+  } catch (error) {
+    if (error.response) {
+      throw new ApiError(
+        error.response.status,
+        "External API error during scenario start.",
+        [error.response.data]
+      );
+    } else if (error.request) {
+      // No response received
+      throw new ApiError(
+        502,
+        "No response from external API. Please check the baseURL or network connection."
+      );
+    } else if (error instanceof ApiError) {
+      throw error;
+    } else {
+      throw new ApiError(
+        500,
+        "Failed to start scenario.",
+        [error.message],
+        error.stack
+      );
+    }
+  }
+});
+
+export { createNode, deleteNode, getNodesByRegion, getAllNodes,getAllDistricts,startScenario };

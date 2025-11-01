@@ -2,11 +2,6 @@ import mongoose from "mongoose";
 
 
 const requestSchema = new mongoose.Schema({
-    requestId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     requesterNode: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Node',
