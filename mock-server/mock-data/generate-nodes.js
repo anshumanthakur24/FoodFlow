@@ -7,7 +7,7 @@
   - For each district fetches a bounding box using the Photon (Komoot) geocoder (cached locally),
     falls back to a deterministic India-wide bounding box if geocoding fails.
   - Emits 6-10 random nodes per district with at least 3 farms and 3 warehouses.
-  - Writes a JSON array that can be loaded with mongoimport.
+  - Writes separate JSON files for farm/warehouse nodes and NGO profiles.
 
   Usage:
     node generate-nodes.js [optional-output-file]
@@ -26,9 +26,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { MongoClient } = require('mongodb');
 
-const OUTPUT_FILE = process.argv[2]
-  ? path.resolve(process.cwd(), process.argv[2])
-  : path.join(__dirname, 'nodes.generated.json');
+const OUTPUT_ARG = process.argv[2];
+const { nodes: NODES_OUTPUT_FILE, ngos: NGOS_OUTPUT_FILE } =
+  deriveOutputPaths(OUTPUT_ARG);
 const CACHE_FILE = path.join(__dirname, 'geocode-cache.json');
 
 const MONGO_URI =
@@ -38,6 +38,44 @@ const MONGO_COLLECTION = process.env.MONGO_COLLECTION || 'crops_history';
 
 const MIN_PER_DISTRICT = 6; // guarantees >=3 farms and >=3 warehouses
 const MAX_PER_DISTRICT = 10;
+const MIN_NGO_PER_DISTRICT = 0;
+const MAX_NGO_PER_DISTRICT = 2;
+
+function deriveOutputPaths(inputPath) {
+  if (!inputPath) {
+    return {
+      nodes: path.join(__dirname, 'nodes.generated.json'),
+      ngos: path.join(__dirname, 'ngos.generated.json'),
+    };
+  }
+
+  const resolved = path.resolve(process.cwd(), inputPath);
+  try {
+    const stat = fs.statSync(resolved);
+    if (stat.isDirectory()) {
+      return {
+        nodes: path.join(resolved, 'nodes.generated.json'),
+        ngos: path.join(resolved, 'ngos.generated.json'),
+      };
+    }
+  } catch (error) {
+    // Path does not exist yet; continue to derive filenames.
+  }
+
+  const ext = path.extname(resolved);
+  if (ext.toLowerCase() === '.json') {
+    const base = resolved.slice(0, -ext.length) || resolved;
+    return {
+      nodes: resolved,
+      ngos: `${base}.ngos${ext}`,
+    };
+  }
+
+  return {
+    nodes: `${resolved}.nodes.json`,
+    ngos: `${resolved}.ngos.json`,
+  };
+}
 
 function log(step, message) {
   const stamp = new Date().toISOString();
@@ -190,17 +228,25 @@ function buildNode(point, state, district, type, index) {
     .digest('hex')
     .slice(0, 10)
     .toUpperCase();
-  const nodeId = `${type === 'warehouse' ? 'WH' : 'FARM'}-${slugify(
-    district
-  ).toUpperCase()}-${short}`;
-  const name = `${type === 'warehouse' ? 'Warehouse' : 'Farm'} ${district} ${
-    index + 1
-  }`;
+
+  let prefix, name, capacity;
+  if (type === 'warehouse') {
+    prefix = 'WH';
+    name = `Warehouse ${district} ${index + 1}`;
+    capacity = Math.round(10000 + 40000 * Math.random());
+  } else if (type === 'ngo') {
+    prefix = 'NGO';
+    name = `NGO ${district} ${index + 1}`;
+    capacity = Math.round(500 + 2000 * Math.random());
+  } else {
+    prefix = 'FARM';
+    name = `Farm ${district} ${index + 1}`;
+    capacity = Math.round(1000 + 4000 * Math.random());
+  }
+
+  const nodeId = `${prefix}-${slugify(district).toUpperCase()}-${short}`;
   const regionId = `${slugify(state)}:${slugify(district)}`;
-  const capacity =
-    type === 'warehouse'
-      ? Math.round(10000 + 40000 * Math.random())
-      : Math.round(1000 + 4000 * Math.random());
+
   return {
     nodeId,
     type,
@@ -251,7 +297,8 @@ async function generate() {
   }
 
   const cache = loadCache();
-  const nodes = [];
+  const farmWarehouseNodes = [];
+  const ngoNodes = [];
 
   for (let index = 0; index < districts.length; index += 1) {
     const { state, district } = districts[index];
@@ -272,43 +319,74 @@ async function generate() {
       MIN_PER_DISTRICT +
       Math.floor(rng() * (MAX_PER_DISTRICT - MIN_PER_DISTRICT + 1));
 
+    // Determine farm and warehouse counts (preserving original logic)
     const farmCount = Math.max(3, Math.floor(total / 2));
     const warehouseCount = Math.max(3, total - farmCount);
+
+    // Determine NGO count (0-2 per district)
+    const ngoCount =
+      MIN_NGO_PER_DISTRICT +
+      Math.floor(rng() * (MAX_NGO_PER_DISTRICT - MIN_NGO_PER_DISTRICT + 1));
+
+    // Build type array
     const types = [];
     for (let i = 0; i < farmCount; i += 1) types.push('farm');
     for (let i = 0; i < warehouseCount; i += 1) types.push('warehouse');
+    for (let i = 0; i < ngoCount; i += 1) types.push('ngo');
+
+    // Fill any remaining slots with farm/warehouse
     while (types.length < total) types.push(rng() < 0.5 ? 'farm' : 'warehouse');
+
+    // Shuffle types
     for (let i = types.length - 1; i > 0; i -= 1) {
       const swap = Math.floor(rng() * (i + 1));
       [types[i], types[swap]] = [types[swap], types[i]];
     }
 
-    const points = Array.from({ length: total }, () => samplePoint(bbox, rng));
+    const totalNodes = types.length;
+    const points = Array.from({ length: totalNodes }, () =>
+      samplePoint(bbox, rng)
+    );
     points.forEach((point, idx) => {
-      nodes.push(buildNode(point, state, district, types[idx], idx));
+      const node = buildNode(point, state, district, types[idx], idx);
+      if (node.type === 'ngo') {
+        ngoNodes.push(node);
+      } else {
+        farmWarehouseNodes.push(node);
+      }
     });
     log(
       'NODES',
-      `Created ${total} nodes (${
+      `Created ${totalNodes} nodes (${
         types.filter((t) => t === 'farm').length
-      } farms, ${types.filter((t) => t === 'warehouse').length} warehouses)`
+      } farms, ${types.filter((t) => t === 'warehouse').length} warehouses, ${
+        types.filter((t) => t === 'ngo').length
+      } NGOs)`
     );
   }
 
   saveCache(cache);
-  return nodes;
+  return { nodes: farmWarehouseNodes, ngos: ngoNodes };
 }
 
 async function main() {
   try {
     log('START', 'Generating nodes from MongoDB state/district data.');
-    const nodes = await generate();
-    fs.writeFileSync(OUTPUT_FILE, JSON.stringify(nodes, null, 2));
-    log('WRITE', `Wrote ${nodes.length} nodes to ${OUTPUT_FILE}`);
+    const { nodes, ngos } = await generate();
+    fs.writeFileSync(NODES_OUTPUT_FILE, JSON.stringify(nodes, null, 2));
+    fs.writeFileSync(NGOS_OUTPUT_FILE, JSON.stringify(ngos, null, 2));
+    log('WRITE', `Nodes (${nodes.length}) -> ${NODES_OUTPUT_FILE}`);
+    log('WRITE', `NGOs (${ngos.length}) -> ${NGOS_OUTPUT_FILE}`);
     log(
       'DONE',
       'Import with: mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file "' +
-        OUTPUT_FILE +
+        NODES_OUTPUT_FILE +
+        '"'
+    );
+    log(
+      'DONE',
+      'Import NGOs with: mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection ngos --jsonArray --file "' +
+        NGOS_OUTPUT_FILE +
         '"'
     );
   } catch (error) {
