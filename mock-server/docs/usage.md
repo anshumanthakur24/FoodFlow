@@ -1,25 +1,14 @@
 # Scenario Manager Mock Server Usage
 
-## If by chance docker compose is not able to use auto-download.py
+## Data Seeding
 
-Use
+Reference CSV and Excel data for the mock server is checked into the repository under `mock-server/mock-data/`. Docker builds no longer attempt to download files at runtime.
 
-```js
-link =
-  'https://drive.google.com/drive/u/0/folders/1gQwjKeqUemDCtn98AmEA7qCry-lC9Rvd';
-```
-
-to download all files in `mock-server/crop-generation-data/` manually.
-then use
+To refresh the Mongo collections manually (for example, after updating the Excel files), run the bundled scripts from the `mock-server/mock-data/` directory:
 
 ```powershell
-python excel_to_mongo_v2.py --folder ./crop-generation-data --mongo-uri mongodb://localhost:27017 --db agriculture
-```
-
-at last use
-
-```powershell
-python infer_seasons.py --mongo-uri mongodb://localhost:27017 --db agriculture --input_coll crops_history --grouping district --min_coverage 0.75
+python excel-to-mongo.py --folder ./crop-generation-data --mongo-uri mongodb://localhost:27017 --db arcanix
+python infer-seasons.py --mongo-uri mongodb://localhost:27017 --db arcanix --input_coll crops_history --grouping district --min_coverage 0.75
 ```
 
 ## Configuration
@@ -92,7 +81,7 @@ Fetch recent events persisted in MongoDB (`sim_events`). `limit` defaults to 100
 Build and launch the mock server alongside MongoDB with seeded reference data:
 
 1. From the repo root run `docker compose up --build`.
-2. Wait for the entrypoint logs to show the Python data prep scripts completing (`auto-download.py`, `excel-to-mongo.py`, `infer-seasons.py`).
+2. Wait for the entrypoint logs to show the Python data prep scripts completing (`excel-to-mongo.py`, `infer-seasons.py`).
 3. Interact with the API at `http://localhost:5001` once the "Starting Scenario Manager" log appears.
 
 The compose setup exposes an optional `MONGO_DB` environment variable that defaults to the database parsed from `MONGO_URI`. Setting `SKIP_DATA_SETUP=1` on the `mock-server` service skips the Python loaders if you already have seeded data.
