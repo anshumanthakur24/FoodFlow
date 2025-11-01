@@ -2,37 +2,39 @@ import mongoose from "mongoose";
 
 
 const requestSchema = new mongoose.Schema({
-    requestId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     requesterNode: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'Node',
+        ref: 'NGO',
         required: true
+    },
+    requestID:{
+        type: String
     },
     items: [{
         foodType: { type: String },
         required_kg: { type: Number }
     }],
-    requiredBy_iso: {
+    createdOn: {
+        type: Date
+    },
+    requiredBefore: {
         type: Date
     },
     status: {
         type: String,
-        enum: ['open', 'fulfilled', 'pending', 'cancelled'],
-        default: 'open'
+        enum: [ 'fulfilled', 'pending', 'cancelled',"approved"],
+        default: 'pending'
+    },
+    approvedOn: { 
+        type:Date
+    },
+    fullFilledOn:{
+        type: Date,
     },
     fulfilledBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Node'
-    },
-    history: [{
-        time: { type: Date },
-        action: { type: String },
-        note: { type: String }
-    }]
-});
+    }
+},{ timestamps: true });
 
 export const Request = mongoose.model("Request", requestSchema);

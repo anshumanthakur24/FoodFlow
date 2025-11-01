@@ -1,11 +1,6 @@
 import mongoose from "mongoose";
 
 const eventSchema = new mongoose.Schema({
-    eventId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     time: {
         type: Date,
         required: true
@@ -38,7 +33,7 @@ const eventSchema = new mongoose.Schema({
         type: Object,
         required: true
     }
-});
+},{ timestamps: true });
 
 eventSchema.index({ location: '2dsphere' });
 eventSchema.index({ time: 1 });

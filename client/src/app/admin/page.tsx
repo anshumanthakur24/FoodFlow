@@ -1,6 +1,8 @@
 ﻿"use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 interface Node {
   id: string;
@@ -8,23 +10,42 @@ interface Node {
   type: "farm" | "warehouse" | "ngo" | "processing";
   name: string;
   regionId: string;
+  district: string;
   location: {
+    type: string;
     coordinates: [number, number];
   };
   capacity_kg?: number;
   contact?: string;
 }
 
-const MOCK_DISTRICTS = [
-  "Mumbai",
-  "Delhi",
-  "Bangalore",
-  "Kolkata",
-  "Chennai",
-  "Hyderabad",
-  "Pune",
-  "Ahmedabad",
-];
+interface ApiNode {
+  _id: string;
+  nodeId?: string;
+  type: "farm" | "warehouse" | "ngo" | "processing";
+  name: string;
+  regionId: string;
+  district: string;
+  location: {
+    type: string;
+    coordinates: [number, number];
+  };
+  capacity_kg?: number;
+  contact?: string;
+}
+
+// const MOCK_DISTRICTS = [
+//   "Mumbai",
+//   "Delhi",
+//   "Bangalore",
+//   "Kolkata",
+//   "Chennai",
+//   "Hyderabad",
+//   "Pune",
+//   "Ahmedabad",
+// ];
+
+// fetching district data from backend
 
 const MOCK_DATA: Record<string, Node[]> = {
   Mumbai: [
@@ -34,7 +55,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "farm",
       name: "Green Valley Farm",
       regionId: "Mumbai",
-      location: { coordinates: [72.8777, 19.076] },
+      district: "Mumbai",
+      location: { type: "Point", coordinates: [72.8777, 19.076] },
       capacity_kg: 5000,
       contact: "+91 98765 43210",
     },
@@ -44,7 +66,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "warehouse",
       name: "Central Storage Facility",
       regionId: "Mumbai",
-      location: { coordinates: [72.8311, 18.9388] },
+      district: "Mumbai",
+      location: { type: "Point", coordinates: [72.8311, 18.9388] },
       capacity_kg: 50000,
       contact: "+91 98765 43211",
     },
@@ -54,7 +77,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "ngo",
       name: "Food For All Mumbai",
       regionId: "Mumbai",
-      location: { coordinates: [72.8479, 19.0176] },
+      district: "Mumbai",
+      location: { type: "Point", coordinates: [72.8479, 19.0176] },
       contact: "+91 98765 43212",
     },
   ],
@@ -65,7 +89,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "farm",
       name: "Capital Organic Farm",
       regionId: "Delhi",
-      location: { coordinates: [77.1025, 28.7041] },
+      district: "Delhi",
+      location: { type: "Point", coordinates: [77.1025, 28.7041] },
       capacity_kg: 3000,
       contact: "+91 98765 43213",
     },
@@ -75,7 +100,8 @@ const MOCK_DATA: Record<string, Node[]> = {
       type: "warehouse",
       name: "North Delhi Warehouse",
       regionId: "Delhi",
-      location: { coordinates: [77.2315, 28.6139] },
+      district: "Delhi",
+      location: { type: "Point", coordinates: [77.2315, 28.6139] },
       capacity_kg: 40000,
       contact: "+91 98765 43214",
     },
@@ -88,6 +114,19 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<string>("all");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [allNodes, setAllNodes] = useState<Record<string, Node[]>>(MOCK_DATA);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [DISTRICTS, setMockDistricts] = useState<string[]>([]);
+
+  // District search state
+  const [districtSearchOpen, setDistrictSearchOpen] = useState(false);
+  const [districtSearchQuery, setDistrictSearchQuery] = useState("");
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(5);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalNodes, setTotalNodes] = useState(0);
 
   // Form state for new node
   const [newNode, setNewNode] = useState({
@@ -100,17 +139,123 @@ export default function AdminDashboard() {
     longitude: "",
   });
 
-  const handleDistrictChange = useCallback(
-    (district: string) => {
-      setSelectedDistrict(district);
-      if (district) {
-        setFilteredNodes(allNodes[district] || []);
-      } else {
-        setFilteredNodes([]);
+  useEffect(() => {
+    const fetchDistricts = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/node/getAllDistricts`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch districts: ${response.statusText}`);
+        }
+        const result = await response.json();
+        setMockDistricts(result.data.districts);
+      } catch (err) {
+        console.error("Error fetching districts:", err);
       }
-      setActiveTab("all");
+    };
+
+    fetchDistricts();
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (districtSearchOpen && !target.closest(".district-dropdown")) {
+        setDistrictSearchOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [districtSearchOpen]);
+
+  // all nodes on initial render
+
+  useEffect(() => {
+    fetchNodes("", 1, itemsPerPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsPerPage]);
+
+  // Fetch nodes from API
+  const fetchNodes = useCallback(
+    async (
+      district: string,
+      page: number = 1,
+      newLimit: number = itemsPerPage
+    ) => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        // Determine endpoint based on district selection
+        const endpoint = district
+          ? `${API_BASE_URL}/node/district/${district}?page=${page}&limit=${newLimit}`
+          : `${API_BASE_URL}/node/getAllNodes?page=${page}&limit=${newLimit}`;
+
+        const response = await fetch(endpoint);
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch nodes: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        // Map API response to Node interface
+        const nodes: Node[] = result.data.nodes.map((node: ApiNode) => ({
+          id: node._id,
+          nodeId: node.nodeId || node._id,
+          type: node.type,
+          name: node.name,
+          regionId: node.regionId,
+          district: node.district,
+          location: node.location,
+          capacity_kg: node.capacity_kg,
+          contact: node.contact,
+        }));
+
+        // Update state
+        setFilteredNodes(nodes);
+        setCurrentPage(page);
+        setTotalPages(result.data.pagination.totalPages);
+        setTotalNodes(result.data.totalNodes);
+
+        // Update cache if fetching specific district
+        if (district) {
+          setAllNodes((prev) => ({
+            ...prev,
+            [district]: nodes,
+          }));
+        }
+      } catch (err) {
+        console.error("Error fetching nodes:", err);
+        setError(err instanceof Error ? err.message : "Failed to fetch nodes");
+        setFilteredNodes([]);
+        setCurrentPage(1);
+        setTotalPages(1);
+        setTotalNodes(0);
+      } finally {
+        setIsLoading(false);
+      }
     },
-    [allNodes]
+    [itemsPerPage]
+  );
+
+  const handleDistrictChange = useCallback(
+    async (district: string, page: number = 1) => {
+      setSelectedDistrict(district);
+      setActiveTab("all");
+      await fetchNodes(district, page);
+    },
+    [fetchNodes]
+  );
+
+  // Handle page change
+  const handlePageChange = useCallback(
+    (newPage: number) => {
+      if (newPage < 1 || newPage > totalPages) return;
+      handleDistrictChange(selectedDistrict, newPage);
+    },
+    [selectedDistrict, totalPages, handleDistrictChange]
   );
 
   const farms = filteredNodes.filter((node) => node.type === "farm");
@@ -136,8 +281,9 @@ export default function AdminDashboard() {
   const displayNodes = getDisplayNodes();
 
   // Handle form submission
-  const handleAddNode = (e: React.FormEvent) => {
+  const handleAddNode = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
 
     if (
       !newNode.name ||
@@ -149,90 +295,144 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Generate new node ID
-    const typePrefix = newNode.type.toUpperCase().substring(0, 2);
-    const existingNodes = Object.values(allNodes).flat();
-    const maxId = existingNodes.reduce(
-      (max, node) => Math.max(max, parseInt(node.id) || 0),
-      0
-    );
-    const newId = (maxId + 1).toString();
-    const nodeIdCounter =
-      existingNodes.filter((n) => n.type === newNode.type).length + 1;
-    const newNodeId = `${typePrefix}${String(nodeIdCounter).padStart(3, "0")}`;
+    setIsLoading(true);
 
-    const createdNode: Node = {
-      id: newId,
-      nodeId: newNodeId,
-      type: newNode.type,
-      name: newNode.name,
-      regionId: newNode.regionId,
-      location: {
-        coordinates: [
-          parseFloat(newNode.longitude),
-          parseFloat(newNode.latitude),
-        ],
-      },
-      capacity_kg: newNode.capacity_kg
-        ? parseInt(newNode.capacity_kg)
-        : undefined,
-      contact: newNode.contact || undefined,
-    };
+    try {
+      // Prepare data in backend format
+      const nodeData = {
+        type: newNode.type,
+        name: newNode.name,
+        regionId: newNode.regionId,
+        district: newNode.regionId, // Using regionId as district
+        location: {
+          type: "Point",
+          coordinates: [
+            parseFloat(newNode.longitude),
+            parseFloat(newNode.latitude),
+          ],
+        },
+        capacity_kg: newNode.capacity_kg ? parseInt(newNode.capacity_kg) : 0,
+        contact: newNode.contact || null,
+      };
 
-    // Add to allNodes
-    const updatedNodes = { ...allNodes };
-    if (!updatedNodes[newNode.regionId]) {
-      updatedNodes[newNode.regionId] = [];
+      const response = await fetch(`${API_BASE_URL}/addNewNode`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(nodeData),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `Failed to create node: ${response.statusText}`
+        );
+      }
+
+      const result = await response.json();
+      const createdNode = result.data;
+
+      // Convert to frontend format
+      const frontendNode: Node = {
+        id: createdNode._id,
+        nodeId: createdNode.nodeId || createdNode._id,
+        type: createdNode.type,
+        name: createdNode.name,
+        regionId: createdNode.regionId,
+        district: createdNode.district,
+        location: createdNode.location,
+        capacity_kg: createdNode.capacity_kg,
+        contact: createdNode.contact,
+      };
+
+      // Update allNodes cache
+      const updatedNodes = { ...allNodes };
+      if (!updatedNodes[newNode.regionId]) {
+        updatedNodes[newNode.regionId] = [];
+      }
+      updatedNodes[newNode.regionId] = [
+        ...updatedNodes[newNode.regionId],
+        frontendNode,
+      ];
+      setAllNodes(updatedNodes);
+
+      // Update filtered nodes if same district
+      if (selectedDistrict === newNode.regionId) {
+        setFilteredNodes(updatedNodes[newNode.regionId]);
+      }
+
+      // Reset form and close modal
+      setNewNode({
+        type: "farm",
+        name: "",
+        regionId: "",
+        capacity_kg: "",
+        contact: "",
+        latitude: "",
+        longitude: "",
+      });
+      setIsAddModalOpen(false);
+
+      alert(
+        `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} "${createdNode.name}" added successfully!`
+      );
+    } catch (err) {
+      console.error("Error adding node:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to add node";
+      setError(errorMessage);
+      alert(`❌ Error: ${errorMessage}`);
+    } finally {
+      setIsLoading(false);
     }
-    updatedNodes[newNode.regionId] = [
-      ...updatedNodes[newNode.regionId],
-      createdNode,
-    ];
-    setAllNodes(updatedNodes);
-
-    // Update filtered nodes if same district
-    if (selectedDistrict === newNode.regionId) {
-      setFilteredNodes(updatedNodes[newNode.regionId]);
-    }
-
-    // Reset form and close modal
-    setNewNode({
-      type: "farm",
-      name: "",
-      regionId: "",
-      capacity_kg: "",
-      contact: "",
-      latitude: "",
-      longitude: "",
-    });
-    setIsAddModalOpen(false);
-
-    alert(
-      `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} added successfully!`
-    );
   };
 
   // Handle delete node
-  const handleDeleteNode = (nodeId: string, nodeName: string) => {
+  const handleDeleteNode = async (nodeId: string, nodeName: string) => {
     if (!confirm(`Are you sure you want to delete "${nodeName}"?`)) {
       return;
     }
 
-    // Remove from allNodes
-    const updatedNodes = { ...allNodes };
-    Object.keys(updatedNodes).forEach((district) => {
-      updatedNodes[district] = updatedNodes[district].filter(
-        (node) => node.id !== nodeId
-      );
-    });
-    setAllNodes(updatedNodes);
+    setIsLoading(true);
+    setError(null);
 
-    // Update filtered nodes if viewing that district
-    if (selectedDistrict) {
-      setFilteredNodes(updatedNodes[selectedDistrict] || []);
+    try {
+      const response = await fetch(`${API_BASE_URL}/deleteNode/${nodeId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(
+          errorData.message || `Failed to delete node: ${response.statusText}`
+        );
+      }
+
+      // Remove from allNodes cache
+      const updatedNodes = { ...allNodes };
+      Object.keys(updatedNodes).forEach((district) => {
+        updatedNodes[district] = updatedNodes[district].filter(
+          (node) => node.id !== nodeId
+        );
+      });
+      setAllNodes(updatedNodes);
+
+      // Update filtered nodes if viewing that district
+      if (selectedDistrict) {
+        setFilteredNodes(updatedNodes[selectedDistrict] || []);
+      }
+
+      alert(`🗑️ "${nodeName}" deleted successfully!`);
+    } catch (err) {
+      console.error("Error deleting node:", err);
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to delete node";
+      setError(errorMessage);
+      alert(`❌ Error: ${errorMessage}`);
+    } finally {
+      setIsLoading(false);
     }
-
-    alert(`🗑️ "${nodeName}" deleted successfully!`);
   };
 
   return (
@@ -276,36 +476,161 @@ export default function AdminDashboard() {
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <label
-              htmlFor="district"
-              className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
-            >
-              District
-            </label>
-            <select
-              id="district"
-              value={selectedDistrict}
-              onChange={(e) => handleDistrictChange(e.target.value)}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
-            >
-              <option value="">Select district</option>
-              {MOCK_DISTRICTS.map((district) => (
-                <option key={district} value={district}>
-                  {district}
-                </option>
-              ))}
-            </select>
+          <div className="flex items-center gap-4">
+            {/* District Filter */}
+            <div className="relative flex items-center gap-2 district-dropdown">
+              <label
+                htmlFor="district"
+                className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                District
+              </label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setDistrictSearchOpen(!districtSearchOpen)}
+                  className="flex min-w-[200px] items-center justify-between gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 hover:border-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+                >
+                  <span className="truncate">
+                    {selectedDistrict || "All Districts"}
+                  </span>
+                  <svg
+                    className={`h-4 w-4 transition-transform ${districtSearchOpen ? "rotate-180" : ""}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </button>
+
+                {/* Dropdown Menu */}
+                {districtSearchOpen && (
+                  <div className="absolute left-0 top-full z-50 mt-1 w-[280px] rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                    {/* Search Input */}
+                    <div className="border-b border-zinc-200 p-2 dark:border-zinc-700">
+                      <div className="relative">
+                        <svg
+                          className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                          />
+                        </svg>
+                        <input
+                          type="text"
+                          placeholder="Search districts..."
+                          value={districtSearchQuery}
+                          onChange={(e) =>
+                            setDistrictSearchQuery(e.target.value)
+                          }
+                          className="w-full rounded border border-zinc-300 bg-white py-1.5 pl-9 pr-3 text-sm text-zinc-900 placeholder-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* District List */}
+                    <div className="max-h-[300px] overflow-y-auto p-1">
+                      {/* All Districts Option */}
+                      <button
+                        onClick={() => {
+                          handleDistrictChange("");
+                          setDistrictSearchOpen(false);
+                          setDistrictSearchQuery("");
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+                          selectedDistrict === ""
+                            ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
+                            : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        }`}
+                      >
+                        All Districts
+                      </button>
+
+                      {/* Filtered Districts */}
+                      {DISTRICTS.filter((district) =>
+                        district
+                          .toLowerCase()
+                          .includes(districtSearchQuery.toLowerCase())
+                      ).map((district) => (
+                        <button
+                          key={district}
+                          onClick={() => {
+                            handleDistrictChange(district);
+                            setDistrictSearchOpen(false);
+                            setDistrictSearchQuery("");
+                          }}
+                          className={`w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+                            selectedDistrict === district
+                              ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
+                              : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          }`}
+                        >
+                          {district}
+                        </button>
+                      ))}
+
+                      {/* No results message */}
+                      {DISTRICTS.filter((district) =>
+                        district
+                          .toLowerCase()
+                          .includes(districtSearchQuery.toLowerCase())
+                      ).length === 0 &&
+                        districtSearchQuery && (
+                          <div className="px-3 py-2 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                            No districts found
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Items Per Page Selector */}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="itemsPerPage"
+                className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                Rows
+              </label>
+              <select
+                id="itemsPerPage"
+                value={itemsPerPage}
+                onChange={(e) => {
+                  const newLimit = parseInt(e.target.value);
+                  setItemsPerPage(newLimit);
+                  fetchNodes(selectedDistrict, 1, newLimit);
+                }}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+              >
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            {selectedDistrict && (
-              <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-                <span>Showing:</span>
-                <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                  {selectedDistrict}
-                </span>
-              </div>
-            )}
+            <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+              <span>Showing:</span>
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                {selectedDistrict || "All Districts"}
+              </span>
+            </div>
             <button
               onClick={() => {
                 // Pre-fill district if one is selected
@@ -334,7 +659,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {selectedDistrict && filteredNodes.length > 0 && (
+        {filteredNodes.length > 0 && !isLoading && (
           <>
             <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
               <button
@@ -385,6 +710,105 @@ export default function AdminDashboard() {
                 </div>
               </button>
             </div>
+
+            {/* Pagination Controls - Top */}
+            {totalPages > 1 && itemsPerPage >= 50 && (
+              <div className="mb-4 flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span>
+                    Showing{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {(currentPage - 1) * itemsPerPage + 1}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {Math.min(currentPage * itemsPerPage, totalNodes)}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {totalNodes}
+                    </span>{" "}
+                    results
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M15 19l-7-7 7-7"
+                      />
+                    </svg>
+                    Previous
+                  </button>
+
+                  {/* Page Numbers */}
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handlePageChange(pageNum)}
+                          className={`min-w-10 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                            currentPage === pageNum
+                              ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Next Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    Next
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="mb-4 flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800">
               <button
@@ -520,10 +944,109 @@ export default function AdminDashboard() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls - Bottom */}
+            {totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span>
+                    Showing{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {(currentPage - 1) * itemsPerPage + 1}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {Math.min(currentPage * itemsPerPage, totalNodes)}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {totalNodes}
+                    </span>{" "}
+                    results
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M15 19l-7-7 7-7"
+                      />
+                    </svg>
+                    Previous
+                  </button>
+
+                  {/* Page Numbers */}
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handlePageChange(pageNum)}
+                          className={`min-w-10 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                            currentPage === pageNum
+                              ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Next Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    Next
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
 
-        {!selectedDistrict && (
+        {filteredNodes.length === 0 && !isLoading && !error && (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-center">
               <svg
@@ -549,11 +1072,22 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {selectedDistrict && filteredNodes.length === 0 && (
+        {isLoading && (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-center">
+              <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-zinc-200 border-t-zinc-900 dark:border-zinc-800 dark:border-t-zinc-100"></div>
+              <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
+                Loading nodes...
+              </p>
+            </div>
+          </div>
+        )}
+
+        {error && !isLoading && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/30">
+            <div className="flex items-start gap-3">
               <svg
-                className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600"
+                className="h-5 w-5 text-red-600 dark:text-red-400"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -561,16 +1095,24 @@ export default function AdminDashboard() {
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+                  strokeWidth={2}
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
                 />
               </svg>
-              <h3 className="mt-4 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                No facilities found
-              </h3>
-              <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                No facilities registered in {selectedDistrict}
-              </p>
+              <div className="flex-1">
+                <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+                  Error loading nodes
+                </h3>
+                <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+                  {error}
+                </p>
+                <button
+                  onClick={() => handleDistrictChange(selectedDistrict)}
+                  className="mt-2 text-sm font-medium text-red-800 hover:text-red-900 dark:text-red-200 dark:hover:text-red-100"
+                >
+                  Try again
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -666,7 +1208,7 @@ export default function AdminDashboard() {
                     required
                   >
                     <option value="">Select district</option>
-                    {MOCK_DISTRICTS.map((district) => (
+                    {DISTRICTS.map((district) => (
                       <option key={district} value={district}>
                         {district}
                       </option>

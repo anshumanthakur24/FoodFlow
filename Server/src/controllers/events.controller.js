@@ -4,61 +4,157 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import {Event} from "../models/event.model.js";
 import {Request} from "../models/request.model.js";
 
-const storeEvent = asyncHandler(async (req, res) => {   
-    try {
-        const { eventId, time, type, location, payload } = req.body;
+const storeEvent = asyncHandler(async (req, res) => {
+  try {
+    const { time, type, location, payload } = req.body;
 
-        if (!eventId || !time || !type || !location || !payload) {
-            throw new ApiError(
-                400,
-                "Missing required fields. 'eventId', 'time', 'type', 'location', and 'payload' are mandatory."
-            );
-        }
-
-        
-        if (!location.type ||location.type !== 'Point' ||!Array.isArray(location.coordinates) || location.coordinates.length !== 2) 
-            {
-            throw new ApiError(
-                400,
-                "Invalid 'location' format. Must include type: 'Point' and [longitude, latitude] coordinates."
-            );
-        }
-
-        const existingEvent = await Event.findOne({ eventId });
-        if (existingEvent) {
-            throw new ApiError(409, `Event with ID '${eventId}' already exists.`);
-        }
-
-        const newEvent = await Event.create({
-            eventId,
-            time: new Date(time), 
-            type,
-            location,
-            payload
-        });
-
-        return res
-            .status(201)
-            .json(
-                new ApiResponse(
-                    201,
-                    newEvent,
-                    "Event stored successfully."
-                )
-            );
-
-    } catch (error) {
-        if (error instanceof ApiError) {
-            throw error; 
-        } else {
-            throw new ApiError(
-                500,
-                "Failed to store event data.",
-                [error.message],
-                error.stack
-            );
-        }
+    if (!time || !type || !location || !payload) {
+      throw new ApiError(
+        400,
+        "Missing required fields. 'time', 'type', 'location', and 'payload' are mandatory."
+      );
     }
+
+    if (
+      !location.type ||
+      location.type !== "Point" ||
+      !Array.isArray(location.coordinates) ||
+      location.coordinates.length !== 2
+    ) {
+      throw new ApiError(
+        400,
+        "Invalid 'location' format. Must include type: 'Point' and [longitude, latitude] coordinates."
+      );
+    }
+
+    // store event in DB
+    const newEvent = await Event.create({
+      time: new Date(time),
+      type,
+      location,
+      payload,
+    });
+
+    let createdBatch = null;
+    let createdRequest = null;
+
+    // 🟩 FARM PRODUCTION EVENT
+    if (type === "farm_production") {
+      const { emittedFrom, quantity_kg } = payload;
+
+      if (!emittedFrom || !emittedFrom.nodeId) {
+        throw new ApiError(
+          400,
+          "Missing 'emittedFrom.nodeId' in payload for 'farm_production'."
+        );
+      }
+
+      const nodeDoc = await Node.findOne({ name: emittedFrom.nodeId });
+      if (!nodeDoc) {
+        throw new ApiError(
+          404,
+          `No Node found for emittedFrom.nodeId '${emittedFrom.nodeId}'.`
+        );
+      }
+
+      const batchQty = quantity_kg || 0;
+      if (batchQty <= 0) {
+        throw new ApiError(
+          400,
+          "Invalid batch quantity. 'quantity_kg' must be a positive number."
+        );
+      }
+
+      createdBatch = await Batch.create({
+        parentBatchId: null,
+        quantity_kg: batchQty,
+        original_quantity_kg: batchQty,
+        originNode: nodeDoc._id,
+        currentNode: nodeDoc._id,
+        shelf_life_hours: null,
+        manufacture_date: new Date(time),
+        expiry_iso: null,
+        initial_temp_c: null,
+        freshnessPct: 100,
+        history: [
+          {
+            time: new Date(time),
+            action: "created",
+            from: nodeDoc._id,
+            to: nodeDoc._id,
+            note: `Batch created from ${emittedFrom.nodeId} (${emittedFrom.type}).`,
+          },
+        ],
+        metadata: {
+          district: emittedFrom.district,
+          state: emittedFrom.state,
+          coordinates: emittedFrom.location || {},
+        },
+        status: "stored",
+      });
+    }
+
+    // 🟦 NGO REQUEST EVENT
+    else if (type === "ngo_request") {
+      const { requesterNode, requestID, items, createdOn, requiredBefore } = payload;
+
+      if (!requesterNode || !requestID) {
+        throw new ApiError(
+          400,
+          "Missing required fields in payload for 'ngo_request'. 'requesterNode' and 'requestID' are required."
+        );
+      }
+
+      // Find NGO by name or ID
+      const ngoDoc =
+        (await NGO.findOne({ name: requesterNode })) ||
+        (mongoose.isValidObjectId(requesterNode)
+          ? await NGO.findById(requesterNode)
+          : null);
+
+      if (!ngoDoc) {
+        throw new ApiError(404, `NGO '${requesterNode}' not found in database.`);
+      }
+
+      // Create the request entry
+      createdRequest = await Request.create({
+        requesterNode: ngoDoc._id,
+        requestID,
+        items: items || [],
+        createdOn: createdOn ? new Date(createdOn) : new Date(time),
+        requiredBefore: requiredBefore ? new Date(requiredBefore) : null,
+        status: "pending",
+      });
+    }
+
+    // ✅ RESPONSE
+    return res.status(201).json(
+      new ApiResponse(
+        201,
+        {
+          event: newEvent,
+          batchCreated: !!createdBatch,
+          batch: createdBatch || null,
+          requestCreated: !!createdRequest,
+          request: createdRequest || null,
+        },
+        createdBatch
+          ? "Event stored and new batch created successfully."
+          : createdRequest
+          ? "Event stored and new NGO request created successfully."
+          : "Event stored successfully."
+      )
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    else
+      throw new ApiError(
+        500,
+        "Failed to store event data.",
+        [error.message],
+        error.stack
+      );
+  }
 });
 
 const createNGORequest = asyncHandler(async (req, res) => {
@@ -128,7 +224,7 @@ const createNGORequest = asyncHandler(async (req, res) => {
 
 const newShipment = asyncHandler(async (req, res) => {
     return res
-            .status(500)
+            .status(200)
             .json(
                 new ApiResponse(
                     500,
@@ -136,7 +232,6 @@ const newShipment = asyncHandler(async (req, res) => {
                     "No need for Shipment data"
                 )
             )
-
 });
 
 const shipmentUpdate = asyncHandler(async (req, res) => {

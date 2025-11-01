@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const nodeSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ["farm", "warehouse", "ngo", "processing"],
+    enum: ["farm", "warehouse"],
     required: true,
   },
   name: {
@@ -36,7 +36,7 @@ const nodeSchema = new mongoose.Schema({
   contact: {
     type: String,
   },
-});
+},{ timestamps: true });
 nodeSchema.index({ location: "2dsphere" });
 
 export const Node = mongoose.model("Node", nodeSchema);

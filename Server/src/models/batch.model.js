@@ -1,13 +1,9 @@
 import mongoose from "mongoose";
 
 const batchSchema = new mongoose.Schema({
-    batchId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     parentBatchId: {
-        type: String,
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Batch",
         default: null
     },
     foodType: {
@@ -62,7 +58,7 @@ const batchSchema = new mongoose.Schema({
     metadata: {
         type: Object
     }
-});
+},{ timestamps: true });
 
 
 export const Batch = mongoose.model("Batch", batchSchema);
