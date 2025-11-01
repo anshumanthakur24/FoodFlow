@@ -45,13 +45,17 @@ function runPythonModule({ pythonBin, cwd, moduleName, args = [], payload }) {
   });
 }
 
-function runInference({ pythonBin, cwd, modelDir, records }) {
+function runInference({ pythonBin, cwd, modelDir, payload }) {
+  // Payload can be either { records: [...] } (feature rows) or raw Server-model data
+  // such as { nodes: [...], requests: [...], shipments: [...], batches: [...], freq: 'M' }.
+  const effectivePayload =
+    payload && typeof payload === 'object' ? payload : {};
   return runPythonModule({
     pythonBin,
     cwd,
     moduleName: 'src.infer',
     args: ['--model-dir', modelDir],
-    payload: { records },
+    payload: effectivePayload,
   });
 }
 

@@ -37,6 +37,10 @@ Any unset value falls back to the defaults above.
 
 Start a deterministic simulation.
 
+There are two ways to scope where events are emitted from:
+
+1. Provide `nodes` directly (preferred). Each item should match `Server/src/models/node.model.js` shape (at least `nodeId`, `type`, `district`, optional `state`, and `location.coordinates` as `[lon, lat]`).
+
 ```json
 {
   "name": "HarvestRun-1",
@@ -44,15 +48,28 @@ Start a deterministic simulation.
   "startDate": "2025-11-01T00:00:00Z",
   "batchSize": 20,
   "intervalMs": 2000,
-  "regions": ["Andhra Pradesh"],
+  "nodes": [
+    {
+      "nodeId": "FARM-001",
+      "type": "farm",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "location": { "type": "Point", "coordinates": [73.86, 18.52] }
+    },
+    {
+      "nodeId": "WH-001",
+      "type": "warehouse",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "location": { "type": "Point", "coordinates": [73.9, 18.55] }
+    }
+  ],
   "durationMinutes": 5,
-  "probabilities": {
-    "farm": 0.6,
-    "shipment": 0.3,
-    "ngo": 0.1
-  }
+  "probabilities": { "farm": 0.7, "shipment": 0.25, "ngo": 0.05 }
 }
 ```
+
+2. Legacy: provide `regions` and the simulator will resolve regions/warehouses from Mongo.
 
 Returns: `{ "scenarioId": string, "status": "running" }`
 
@@ -75,6 +92,25 @@ Retrieve scenario metadata, status, configuration, and stats.
 ### GET `/api/scenario/:id/events?limit=100`
 
 Fetch recent events persisted in MongoDB (`sim_events`). `limit` defaults to 100 and is capped at 500.
+
+All emitted events now include an `emittedFrom` object inside the payload with the source node details:
+
+```json
+{
+  "type": "farm",
+  "payload": {
+    "emittedFrom": {
+      "nodeId": "FARM-001",
+      "type": "farm",
+      "district": "Pune",
+      "state": "Maharashtra",
+      "location": { "lat": 18.52, "lon": 73.86 }
+    },
+    "batch": { "batchId": "...", "quantity_kg": 2500 },
+    "quantity_kg": 2500
+  }
+}
+```
 
 ## Docker
 

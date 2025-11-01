@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import joblib
 import numpy as np
@@ -52,6 +52,56 @@ def load_records(args: argparse.Namespace) -> List[Dict[str, Any]]:
         raise ValueError("Provide a non-empty list of records for inference.")
 
     return records
+
+
+def maybe_build_records_from_server_payload(
+    raw_payload: Dict[str, Any],
+    default_freq: str,
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    When the input is raw Server-model data (nodes/requests/shipments/batches),
+    build aggregated feature rows using the same feature engineering used at training time.
+    Returns a list of feature dicts (including key columns) or None when the payload
+    is not in the expected server format.
+    """
+    from .feature_engineering import prepare_feature_frame, KEY_COLUMNS  # lazy import
+    import pandas as pd
+
+    if not isinstance(raw_payload, dict):
+        return None
+
+    has_server_keys = any(
+        key in raw_payload for key in ("nodes", "requests", "shipments", "batches")
+    )
+    if not has_server_keys:
+        return None
+
+    freq = str(raw_payload.get("freq") or default_freq or "M")
+
+    def to_frame(name: str) -> pd.DataFrame:
+        seq = raw_payload.get(name)
+        if isinstance(seq, list) and len(seq) > 0:
+            return pd.DataFrame(seq)
+        return pd.DataFrame()
+
+    nodes_df = to_frame("nodes")
+    requests_df = to_frame("requests")
+    shipments_df = to_frame("shipments")
+    batches_df = to_frame("batches")
+
+    features, _meta = prepare_feature_frame(
+        nodes_df=nodes_df,
+        requests_df=requests_df,
+        shipments_df=shipments_df,
+        batches_df=batches_df,
+        freq=freq,
+        festival_csv_path=None,
+        income_csv_path=None,
+    )
+    if features.empty:
+        return []
+    # Convert to list of dicts, preserving key columns alongside feature columns.
+    return features.to_dict(orient="records")
 
 
 def load_metadata(model_dir: Path, metadata_file: str | None) -> Dict[str, Any]:
@@ -136,12 +186,39 @@ def main() -> None:
     model_dir = Path(args.model_dir)
     if not model_dir.exists():
         raise FileNotFoundError(f"Model directory not found: {model_dir}")
+    # Read raw payload to allow both 'records' and server-model data.
+    raw_text = Path(args.input_file).read_text(encoding="utf-8") if args.input_file else sys.stdin.read()
+    if not raw_text.strip():
+        raise ValueError("No inference payload supplied.")
+    raw_payload = json.loads(raw_text)
 
-    records = load_records(args)
     metadata = load_metadata(model_dir, args.metadata_file)
     feature_columns = metadata.get("feature_columns")
     if not feature_columns:
         raise KeyError("metadata.json does not contain 'feature_columns'.")
+    default_freq = metadata.get("frequency", "M")
+
+    # If raw server-model data was provided, build feature rows on the fly.
+    server_records = None
+    if isinstance(raw_payload, dict):
+        server_records = maybe_build_records_from_server_payload(raw_payload, default_freq)
+
+    if server_records is not None:
+        if not server_records:
+            raise ValueError("No feature rows could be generated from provided Server data.")
+        records = server_records
+    else:
+        # Fall back to existing 'records' or list-of-dicts contract
+        if isinstance(raw_payload, dict) and "records" in raw_payload:
+            records = raw_payload["records"]
+        elif isinstance(raw_payload, list):
+            records = raw_payload
+        else:
+            raise ValueError(
+                "Payload must be an object with 'records' or raw Server data (nodes/requests/shipments/batches)."
+            )
+        if not isinstance(records, list) or not records:
+            raise ValueError("Provide a non-empty list of records for inference.")
 
     matrix, missing_columns = build_matrix(records, feature_columns)
     models = load_pipelines(model_dir)

@@ -164,6 +164,23 @@ function toPointCoordinates(source) {
   return [0, 0];
 }
 
+function nodeToEmittedFrom(node) {
+  const coords = extractCoordinates(node);
+  return {
+    nodeId: node.nodeId || null,
+    type: node.type || null,
+    name: node.name || null,
+    state: node.state || null,
+    district: node.district || null,
+    location: coords
+      ? {
+          lat: Number(coords.lat.toFixed(6)),
+          lon: Number(coords.lon.toFixed(6)),
+        }
+      : null,
+  };
+}
+
 function deriveEventTimestamp(runtime, tickTimestamp, eventIndex) {
   if (runtime.batchSize <= 1) return new Date(tickTimestamp.getTime());
   const spacing = Math.max(
@@ -434,6 +451,85 @@ function buildNgoPayload(
 }
 
 async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
+  // Node-driven mode (preferred): generate directly from farm nodes
+  if (runtime.nodeMode) {
+    if (!runtime.farmNodes.length) return null;
+    const node =
+      runtime.farmNodes[Math.floor(rng() * runtime.farmNodes.length)];
+    const quantityTonnes = Number((10 + rng() * 90).toFixed(2));
+    const eventId = createEventId(eventKey);
+    const quantityKg = Number((quantityTonnes * 1000).toFixed(2));
+    const point = toPointCoordinates(node);
+    const batchId = `batch-${eventId.slice(0, 24)}`;
+    const emittedFrom = nodeToEmittedFrom(node);
+    const payload = {
+      eventId,
+      time: eventTimestamp.toISOString(),
+      type: 'farm_production',
+      location: { type: 'Point', coordinates: point },
+      emittedFrom,
+      payload: {
+        scenarioId: runtime.scenario._id.toString(),
+        tickIndex: runtime.tickIndex,
+        node: emittedFrom,
+        quantity_kg: quantityKg,
+        quantity_tonnes: quantityTonnes,
+        batch: {
+          batchId,
+          parentBatchId: null,
+          foodType: 'Mixed Produce',
+          quantity_kg: quantityKg,
+          original_quantity_kg: quantityKg,
+          originNode: node.nodeId || null,
+          currentNode: node.nodeId || null,
+          status: 'stored',
+          shelf_life_hours: 90 * 24,
+          manufacture_date: eventTimestamp.toISOString(),
+          expiry_iso: null,
+          initial_temp_c: 20,
+          freshnessPct: 100,
+          history: [
+            {
+              time: eventTimestamp.toISOString(),
+              action: 'harvested',
+              from: null,
+              to: node.nodeId || null,
+              note: `Harvest batch for ${node.nodeId || 'farm-node'}`,
+            },
+          ],
+          metadata: {
+            scenarioId: runtime.scenario._id.toString(),
+            tickIndex: runtime.tickIndex,
+          },
+        },
+      },
+    };
+    runtime.farmInventory.push({
+      eventId,
+      node,
+      availableTonnes: quantityTonnes,
+      batchId,
+      timestamp: eventTimestamp,
+      speedKmph: 0,
+      travelHours: 0,
+    });
+    return {
+      type: 'farm',
+      timestamp: eventTimestamp,
+      record: {
+        scenarioId: runtime.scenario._id,
+        type: 'farm',
+        payload,
+        tickIndex: runtime.tickIndex,
+        timestamp: eventTimestamp,
+      },
+      apiRequest: {
+        url: `${MAIN_API_URL}${MAIN_API_ROUTES.farm}`,
+        body: payload,
+      },
+    };
+  }
+
   if (!runtime.regions.length) return null;
   const regionIndex = Math.floor(rng() * runtime.regions.length);
   const region = runtime.regions[regionIndex];
@@ -488,6 +584,78 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
 }
 
 async function createShipmentEvent(runtime, rng, eventKey, eventTimestamp) {
+  if (runtime.nodeMode) {
+    const batch = runtime.farmInventory.find((b) => b.availableTonnes > 0);
+    if (!batch) return null;
+    if (!runtime.warehouseNodes.length) return null;
+    const sourceCoords = extractCoordinates(batch.node);
+    let selected = runtime.warehouseNodes[0];
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (const wh of runtime.warehouseNodes) {
+      const coords = extractCoordinates(wh);
+      if (!coords || !sourceCoords) continue;
+      const d = haversineDistanceKm(sourceCoords, coords);
+      if (d !== null && d < minDistance) {
+        minDistance = d;
+        selected = wh;
+      }
+    }
+    const fraction = 0.25 + rng() * 0.5;
+    const maxQuantity = Math.max(1, batch.availableTonnes * fraction);
+    const quantity = Math.min(batch.availableTonnes, maxQuantity);
+    batch.availableTonnes = Number(
+      Math.max(0, batch.availableTonnes - quantity).toFixed(2)
+    );
+    const eventId = createEventId(eventKey);
+    const startPoint = extractCoordinates(batch.node);
+    const endPoint = extractCoordinates(selected);
+    const distanceKm =
+      startPoint && endPoint ? haversineDistanceKm(startPoint, endPoint) : null;
+    const speedKmph = 40 + rng() * 30;
+    const travelHours = (distanceKm || 50) / speedKmph;
+    const eta = new Date(eventTimestamp.getTime() + travelHours * 3600000);
+    const payload = {
+      shipmentId: eventId,
+      batchIds: [batch.batchId],
+      fromNode: batch.node.nodeId || null,
+      toNode: selected.nodeId || null,
+      start_iso: eventTimestamp.toISOString(),
+      eta_iso: eta.toISOString(),
+      arrived_iso: null,
+      status: 'in_transit',
+      vehicleId: `vehicle-${eventId.slice(0, 6)}`,
+      travel_time_minutes: Math.max(30, Math.round(travelHours * 60)),
+      latest_location: {
+        coordinates: endPoint
+          ? [Number(endPoint.lon.toFixed(6)), Number(endPoint.lat.toFixed(6))]
+          : toPointCoordinates(batch.node),
+        timestamp: eventTimestamp.toISOString(),
+      },
+      emittedFrom: nodeToEmittedFrom(batch.node),
+      metadata: {
+        scenarioId: runtime.scenario._id.toString(),
+        tickIndex: runtime.tickIndex,
+        quantity_kg: Number((quantity * 1000).toFixed(2)),
+        distance_km: distanceKm !== null ? Number(distanceKm.toFixed(2)) : null,
+        sourceFarmEventId: batch.eventId,
+      },
+    };
+    return {
+      type: 'shipment',
+      timestamp: eventTimestamp,
+      record: {
+        scenarioId: runtime.scenario._id,
+        type: 'shipment',
+        payload,
+        tickIndex: runtime.tickIndex,
+        timestamp: eventTimestamp,
+      },
+      apiRequest: {
+        url: `${MAIN_API_URL}${MAIN_API_ROUTES.shipment}`,
+        body: payload,
+      },
+    };
+  }
   const batch = resolveRegionForShipment(runtime, rng);
   if (!batch) return null;
   const fraction = 0.25 + rng() * 0.5;
@@ -532,6 +700,68 @@ async function createShipmentEvent(runtime, rng, eventKey, eventTimestamp) {
 }
 
 async function createNgoEvent(runtime, rng, eventKey, eventTimestamp) {
+  if (runtime.nodeMode) {
+    if (!runtime.ngoNodes.length) return null;
+    const node = runtime.ngoNodes[Math.floor(rng() * runtime.ngoNodes.length)];
+    const severity = Math.min(5, Math.max(1, Math.floor(rng() * 5) + 1));
+    const needsPool = ['cereals', 'pulses', 'fertilizer', 'seeds', 'logistics'];
+    const needsCount = Math.max(1, Math.floor(rng() * needsPool.length));
+    const needs = Array.from({ length: needsCount }, (_, idx) => {
+      const choice =
+        needsPool[
+          (idx + Math.floor(rng() * needsPool.length)) % needsPool.length
+        ];
+      const quantityTonnes = Number((5 + rng() * 20).toFixed(2));
+      return {
+        item: choice,
+        quantityTonnes,
+        requiredKg: Number((quantityTonnes * 1000).toFixed(2)),
+      };
+    });
+    const deadline = new Date(
+      eventTimestamp.getTime() + (2 + rng() * 5) * 86400000
+    );
+    const eventId = createEventId(eventKey);
+    const emittedFrom = nodeToEmittedFrom(node);
+    const payload = {
+      requestId: eventId,
+      requesterNode: node.nodeId || null,
+      items: needs.map((n) => ({
+        foodType: n.item,
+        required_kg: n.requiredKg,
+      })),
+      requiredBy_iso: deadline.toISOString(),
+      status: 'open',
+      emittedFrom,
+      history: [
+        {
+          time: eventTimestamp.toISOString(),
+          action: 'created',
+          note: `Scenario ${runtime.scenario.name} severity ${severity}`,
+        },
+      ],
+      metadata: {
+        scenarioId: runtime.scenario._id.toString(),
+        tickIndex: runtime.tickIndex,
+        severity,
+      },
+    };
+    return {
+      type: 'ngo',
+      timestamp: eventTimestamp,
+      record: {
+        scenarioId: runtime.scenario._id,
+        type: 'ngo',
+        payload,
+        tickIndex: runtime.tickIndex,
+        timestamp: eventTimestamp,
+      },
+      apiRequest: {
+        url: `${MAIN_API_URL}${MAIN_API_ROUTES.ngo}`,
+        body: payload,
+      },
+    };
+  }
   if (!runtime.regions.length) return null;
   const targetIndex = Math.floor(rng() * runtime.regions.length);
   const region = runtime.regions[targetIndex];
@@ -708,12 +938,17 @@ function createRuntime(scenario, options) {
     probabilities: options.probabilities,
     durationMs: options.durationMs,
     regionFilter: options.regionFilter,
+    nodes: Array.isArray(options.nodes) ? options.nodes : [],
+    nodeMode: Array.isArray(options.nodes) && options.nodes.length > 0,
     active: false,
     timer: null,
     tickIndex: 0,
     startedAt: null,
     regions: [],
     warehouses: [],
+    warehouseNodes: [],
+    farmNodes: [],
+    ngoNodes: [],
     farmInventory: [],
     cropCache: new Map(),
     sentEvents: 0,
@@ -734,8 +969,21 @@ function createRuntime(scenario, options) {
   };
 
   runtime.start = async () => {
-    runtime.regions = await loadRegions(runtime.regionFilter);
-    runtime.warehouses = await loadWarehouses(runtime.regions);
+    if (runtime.nodeMode) {
+      // Classify nodes for node-driven simulation
+      runtime.farmNodes = runtime.nodes.filter(
+        (n) => (n.type || '').toLowerCase() === 'farm'
+      );
+      runtime.warehouseNodes = runtime.nodes.filter(
+        (n) => (n.type || '').toLowerCase() === 'warehouse'
+      );
+      runtime.ngoNodes = runtime.nodes.filter(
+        (n) => (n.type || '').toLowerCase() === 'ngo'
+      );
+    } else {
+      runtime.regions = await loadRegions(runtime.regionFilter);
+      runtime.warehouses = await loadWarehouses(runtime.regions);
+    }
     runtime.startedAt = Date.now();
     runtime.tickIndex = 0;
     runtime.active = true;
@@ -782,6 +1030,7 @@ async function startScenario(input) {
     probabilities,
     durationMs,
     regionFilter: Array.isArray(input.regions) ? input.regions : [],
+    nodes: Array.isArray(input.nodes) ? input.nodes : [],
   });
   activeScenarios.set(scenario._id.toString(), runtime);
   try {
