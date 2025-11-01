@@ -1,12 +1,27 @@
 ﻿"use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 interface Node {
   id: string;
   nodeId: string;
+  type: "farm" | "warehouse" | "ngo" | "processing";
+  name: string;
+  regionId: string;
+  district: string;
+  location: {
+    type: string;
+    coordinates: [number, number];
+  };
+  capacity_kg?: number;
+  contact?: string;
+}
+
+interface ApiNode {
+  _id: string;
+  nodeId?: string;
   type: "farm" | "warehouse" | "ngo" | "processing";
   name: string;
   regionId: string;
@@ -100,6 +115,12 @@ export default function AdminDashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(5);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalNodes, setTotalNodes] = useState(0);
+
   // Form state for new node
   const [newNode, setNewNode] = useState({
     type: "farm" as "farm" | "warehouse" | "ngo" | "processing",
@@ -111,58 +132,93 @@ export default function AdminDashboard() {
     longitude: "",
   });
 
-  const handleDistrictChange = useCallback(async (district: string) => {
-    setSelectedDistrict(district);
-    setError(null);
+  // all nodes on initial render
 
-    if (!district) {
-      setFilteredNodes([]);
-      return;
-    }
+  useEffect(() => {
+    fetchNodes("", 1, itemsPerPage);
+  }, [itemsPerPage]);
 
-    setIsLoading(true);
+  // Fetch nodes from API
+  const fetchNodes = useCallback(
+    async (
+      district: string,
+      page: number = 1,
+      newLimit: number = itemsPerPage
+    ) => {
+      setIsLoading(true);
+      setError(null);
 
-    try {
-      const response = await fetch(
-        `${API_BASE_URL}/node/district/${district}?limit=1000`
-      );
+      try {
+        // Determine endpoint based on district selection
+        const endpoint = district
+          ? `${API_BASE_URL}/node/district/${district}?page=${page}&limit=${newLimit}`
+          : `${API_BASE_URL}/node/getAllNodes?page=${page}&limit=${newLimit}`;
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch nodes: ${response.statusText}`);
+        const response = await fetch(endpoint);
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch nodes: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+
+        // Map API response to Node interface
+        const nodes: Node[] = result.data.nodes.map((node: ApiNode) => ({
+          id: node._id,
+          nodeId: node.nodeId || node._id,
+          type: node.type,
+          name: node.name,
+          regionId: node.regionId,
+          district: node.district,
+          location: node.location,
+          capacity_kg: node.capacity_kg,
+          contact: node.contact,
+        }));
+
+        // Update state
+        setFilteredNodes(nodes);
+        setCurrentPage(page);
+        setTotalPages(result.data.pagination.totalPages);
+        setTotalNodes(result.data.totalNodes);
+
+        // Update cache if fetching specific district
+        if (district) {
+          setAllNodes((prev) => ({
+            ...prev,
+            [district]: nodes,
+          }));
+        }
+      } catch (err) {
+        console.error("Error fetching nodes:", err);
+        setError(err instanceof Error ? err.message : "Failed to fetch nodes");
+        setFilteredNodes([]);
+        setCurrentPage(1);
+        setTotalPages(1);
+        setTotalNodes(0);
+      } finally {
+        setIsLoading(false);
       }
+    },
+    [itemsPerPage]
+  );
 
-      const result = await response.json();
+  const handleDistrictChange = useCallback(
+    async (district: string, page: number = 1) => {
+      setSelectedDistrict(district);
+      setActiveTab("all");
+      await fetchNodes(district, page);
+    },
+    [fetchNodes]
+  );
 
-      // Backend returns: { data: { nodes: [...], count, totalNodes, pagination }, message, success }
-      const nodes: Node[] = result.data.nodes.map((node: any) => ({
-        id: node._id,
-        nodeId: node.nodeId || node._id,
-        type: node.type,
-        name: node.name,
-        regionId: node.regionId,
-        district: node.district,
-        location: node.location,
-        capacity_kg: node.capacity_kg,
-        contact: node.contact,
-      }));
-
-      setFilteredNodes(nodes);
-
-      // Update allNodes cache
-      setAllNodes((prev) => ({
-        ...prev,
-        [district]: nodes,
-      }));
-    } catch (err) {
-      console.error("Error fetching nodes:", err);
-      setError(err instanceof Error ? err.message : "Failed to fetch nodes");
-      setFilteredNodes([]);
-    } finally {
-      setIsLoading(false);
-    }
-
-    setActiveTab("all");
-  }, []);
+  // Handle page change
+  const handlePageChange = useCallback(
+    (newPage: number) => {
+      if (newPage < 1 || newPage > totalPages) return;
+      handleDistrictChange(selectedDistrict, newPage);
+    },
+    [selectedDistrict, totalPages, handleDistrictChange]
+  );
 
   const farms = filteredNodes.filter((node) => node.type === "farm");
   const warehouses = filteredNodes.filter((node) => node.type === "warehouse");
@@ -382,36 +438,63 @@ export default function AdminDashboard() {
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <label
-              htmlFor="district"
-              className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
-            >
-              District
-            </label>
-            <select
-              id="district"
-              value={selectedDistrict}
-              onChange={(e) => handleDistrictChange(e.target.value)}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
-            >
-              <option value="">Select district</option>
-              {MOCK_DISTRICTS.map((district) => (
-                <option key={district} value={district}>
-                  {district}
-                </option>
-              ))}
-            </select>
+          <div className="flex items-center gap-4">
+            {/* District Filter */}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="district"
+                className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                District
+              </label>
+              <select
+                id="district"
+                value={selectedDistrict}
+                onChange={(e) => handleDistrictChange(e.target.value)}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+              >
+                <option value="">All Districts</option>
+                {MOCK_DISTRICTS.map((district) => (
+                  <option key={district} value={district}>
+                    {district}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Items Per Page Selector */}
+            <div className="flex items-center gap-2">
+              <label
+                htmlFor="itemsPerPage"
+                className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
+              >
+                Rows
+              </label>
+              <select
+                id="itemsPerPage"
+                value={itemsPerPage}
+                onChange={(e) => {
+                  const newLimit = parseInt(e.target.value);
+                  setItemsPerPage(newLimit);
+                  fetchNodes(selectedDistrict, 1, newLimit);
+                }}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+              >
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            {selectedDistrict && (
-              <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-                <span>Showing:</span>
-                <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                  {selectedDistrict}
-                </span>
-              </div>
-            )}
+            <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+              <span>Showing:</span>
+              <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                {selectedDistrict || "All Districts"}
+              </span>
+            </div>
             <button
               onClick={() => {
                 // Pre-fill district if one is selected
@@ -440,7 +523,7 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {selectedDistrict && filteredNodes.length > 0 && !isLoading && (
+        {filteredNodes.length > 0 && !isLoading && (
           <>
             <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
               <button
@@ -491,6 +574,105 @@ export default function AdminDashboard() {
                 </div>
               </button>
             </div>
+
+            {/* Pagination Controls - Top */}
+            {totalPages > 1 && itemsPerPage >= 50 && (
+              <div className="mb-4 flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span>
+                    Showing{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {(currentPage - 1) * itemsPerPage + 1}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {Math.min(currentPage * itemsPerPage, totalNodes)}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {totalNodes}
+                    </span>{" "}
+                    results
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M15 19l-7-7 7-7"
+                      />
+                    </svg>
+                    Previous
+                  </button>
+
+                  {/* Page Numbers */}
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handlePageChange(pageNum)}
+                          className={`min-w-10 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                            currentPage === pageNum
+                              ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Next Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    Next
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="mb-4 flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800">
               <button
@@ -626,10 +808,109 @@ export default function AdminDashboard() {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls - Bottom */}
+            {totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between rounded-lg border border-zinc-200 bg-white px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+                <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                  <span>
+                    Showing{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {(currentPage - 1) * itemsPerPage + 1}
+                    </span>{" "}
+                    to{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {Math.min(currentPage * itemsPerPage, totalNodes)}
+                    </span>{" "}
+                    of{" "}
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {totalNodes}
+                    </span>{" "}
+                    results
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {/* Previous Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M15 19l-7-7 7-7"
+                      />
+                    </svg>
+                    Previous
+                  </button>
+
+                  {/* Page Numbers */}
+                  <div className="flex items-center gap-1">
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else if (currentPage <= 3) {
+                        pageNum = i + 1;
+                      } else if (currentPage >= totalPages - 2) {
+                        pageNum = totalPages - 4 + i;
+                      } else {
+                        pageNum = currentPage - 2 + i;
+                      }
+
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => handlePageChange(pageNum)}
+                          className={`min-w-10 rounded-md border px-3 py-1.5 text-sm font-medium transition-colors ${
+                            currentPage === pageNum
+                              ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                              : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Next Button */}
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="flex items-center gap-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700 dark:disabled:hover:bg-zinc-800"
+                  >
+                    Next
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5l7 7-7 7"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
 
-        {!selectedDistrict && (
+        {filteredNodes.length === 0 && !isLoading && !error && (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-center">
               <svg
@@ -655,36 +936,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {selectedDistrict &&
-          filteredNodes.length === 0 &&
-          !isLoading &&
-          !error && (
-            <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
-              <div className="text-center">
-                <svg
-                  className="mx-auto h-12 w-12 text-zinc-400 dark:text-zinc-600"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-                  />
-                </svg>
-                <h3 className="mt-4 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                  No nodes found
-                </h3>
-                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-                  No facilities registered in {selectedDistrict}
-                </p>
-              </div>
-            </div>
-          )}
-
-        {selectedDistrict && isLoading && (
+        {isLoading && (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
             <div className="text-center">
               <div className="mx-auto h-12 w-12 animate-spin rounded-full border-4 border-zinc-200 border-t-zinc-900 dark:border-zinc-800 dark:border-t-zinc-100"></div>
@@ -695,7 +947,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {selectedDistrict && error && !isLoading && (
+        {error && !isLoading && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/30">
             <div className="flex items-start gap-3">
               <svg
