@@ -287,23 +287,21 @@ const startScenario = asyncHandler(async (req, res) => {
     }
 
     const formattedNodes = nodes.map((node, index) => ({
-      nodeId: `${node.type}-${String(index + 1).padStart(3, "0")}`,
+      nodeId: node._id.toString(),
+      name: node.name,
       type: node.type,
       district: node.district,
-      state: node.regionId || "Unknown",
+      regionId: node.regionId || "Unknown",
       location: node.location,
     }));
 
     const formattedNGOs = ngos.map((ngo, index) => ({
-      ngoId: `NGO-${String(index + 1).padStart(3, "0")}`,
+      ngoId: ngo._id.toString(),
       name: ngo.name,
       address: ngo.address,
-      district: ngo.address?.district || "Unknown",
-      state: ngo.address?.state || "Unknown",
       contact: ngo.contactInfo || {},
-      pendingRequests: ngo.requestStats?.pending || 0,
-      totalRequests: ngo.requestStats?.total || 0,
-    }));
+      requestStats: ngo.requestStats
+    }));
 
     const payload = {
       name: "HarvestRun-1",
@@ -336,6 +334,7 @@ const startScenario = asyncHandler(async (req, res) => {
       )
     );
   } catch (error) {
+    console.log(error);
     if (error.response) {
       throw new ApiError(
         error.response.status,
