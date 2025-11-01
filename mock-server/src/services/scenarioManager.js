@@ -595,6 +595,8 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
   );
   ledgerEntry.approvedOn = acceptanceTimestamp;
   ledgerEntry.status = 'approved';
+  ledgerEntry.acceptAt = null;
+  ledgerEntry.acceptedAt = acceptanceTimestamp;
   ledgerEntry.history = [
     ...ledgerEntry.history,
     {
@@ -606,7 +608,6 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
   runtime.requestLedger.set(ledgerEntry.requestId, ledgerEntry);
 
   const payload = {
-    requestId: ledgerEntry.requestId,
     status: 'approved',
     approvedOn: acceptanceTimestamp.toISOString(),
   };
@@ -619,13 +620,6 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
     daysOpen,
   };
 
-  if (ledgerEntry.requiredBefore) {
-    payload.requiredBefore = ledgerEntry.requiredBefore.toISOString();
-  }
-  if (ledgerEntry.fulfilledBy) {
-    payload.fulfilledBy = ledgerEntry.fulfilledBy;
-  }
-
   const urlPath = buildRequestLifecycleUrl(
     MAIN_API_ROUTES.requestApproveTemplate,
     ledgerEntry.requestId
@@ -633,6 +627,7 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
   if (!urlPath) return null;
 
   const recordPayload = {
+    requestId: ledgerEntry.requestId,
     ...payload,
     history: [...ledgerEntry.history],
     metadata,
@@ -666,6 +661,8 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     )
   );
   ledgerEntry.status = 'fulfilled';
+  ledgerEntry.fulfilledOn = fulfillmentTimestamp;
+  ledgerEntry.fulfillAt = null;
   ledgerEntry.history = [
     ...ledgerEntry.history,
     {
@@ -681,7 +678,6 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
   runtime.requestLedger.set(ledgerEntry.requestId, ledgerEntry);
 
   const payload = {
-    requestId: ledgerEntry.requestId,
     status: 'fulfilled',
     fulfilledBy: ledgerEntry.fulfilledBy || null,
     approvedOn: (ledgerEntry.approvedOn || fulfillmentTimestamp).toISOString(),
@@ -696,6 +692,7 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     approvedOn: ledgerEntry.approvedOn
       ? ledgerEntry.approvedOn.toISOString()
       : null,
+    fulfilledOn: fulfillmentTimestamp.toISOString(),
     hoursOpen,
   };
 
@@ -706,6 +703,7 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
   if (!urlPath) return null;
 
   const recordPayload = {
+    requestId: ledgerEntry.requestId,
     ...payload,
     history: [...ledgerEntry.history],
     metadata,
@@ -772,13 +770,17 @@ function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
     },
   ];
 
-  const payload = {
+  const apiPayload = {
     requestId,
     requesterNode: requesterNodeId,
     items,
     createdOn: createdOn.toISOString(),
     requiredBefore: requiredBefore.toISOString(),
     status: 'pending',
+  };
+
+  const recordPayload = {
+    ...apiPayload,
     fulfilledBy: null,
     history,
     metadata: {
@@ -864,13 +866,13 @@ function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
     record: {
       scenarioId: runtime.scenario._id,
       type: 'request',
-      payload,
+      payload: recordPayload,
       tickIndex: runtime.tickIndex,
       timestamp: eventTimestamp,
     },
     apiRequest: {
       url: `${MAIN_API_URL}${MAIN_API_ROUTES.requestCreate}`,
-      body: payload,
+      body: apiPayload,
     },
   };
 }
