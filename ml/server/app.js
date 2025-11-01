@@ -1,22 +1,22 @@
-const express = require("express");
+const express = require('express');
 
-const config = require("./config");
+const config = require('./config');
 const {
   listRunDirectories,
   getLatestRunDir,
   ensureRunExists,
   readMetadata,
-} = require("./utils/artifacts");
-const { runInference } = require("./services/pythonRunner");
+} = require('./utils/artifacts');
+const { runInference } = require('./services/pythonRunner');
 
 const app = express();
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: '1mb' }));
 
-app.get("/health", async (req, res, next) => {
+app.get('/health', async (req, res, next) => {
   try {
     const runs = await listRunDirectories(config.artifactsDir);
     res.json({
-      status: "ok",
+      status: 'ok',
       artifactsDir: config.artifactsDir,
       availableRuns: runs,
       pythonBin: config.pythonBin,
@@ -26,7 +26,7 @@ app.get("/health", async (req, res, next) => {
   }
 });
 
-app.get("/runs", async (req, res, next) => {
+app.get('/runs', async (req, res, next) => {
   try {
     const runs = await listRunDirectories(config.artifactsDir);
     res.json({ runs });
@@ -35,7 +35,7 @@ app.get("/runs", async (req, res, next) => {
   }
 });
 
-app.get("/runs/:runId/metadata", async (req, res, next) => {
+app.get('/runs/:runId/metadata', async (req, res, next) => {
   try {
     const { runId } = req.params;
     const runDir = await ensureRunExists(config.artifactsDir, runId);
@@ -46,8 +46,8 @@ app.get("/runs/:runId/metadata", async (req, res, next) => {
       const metadata = await readMetadata(runDir);
       return res.json(metadata);
     } catch (error) {
-      if (error.code === "ENOENT") {
-        return res.status(404).json({ error: "metadata.json not found" });
+      if (error.code === 'ENOENT') {
+        return res.status(404).json({ error: 'metadata.json not found' });
       }
       throw error;
     }
@@ -56,11 +56,13 @@ app.get("/runs/:runId/metadata", async (req, res, next) => {
   }
 });
 
-app.post("/predict", async (req, res, next) => {
+app.post('/predict', async (req, res, next) => {
   try {
     const { records, runId } = req.body || {};
     if (!Array.isArray(records) || !records.length) {
-      return res.status(400).json({ error: "Provide a non-empty array of records" });
+      return res
+        .status(400)
+        .json({ error: 'Provide a non-empty array of records' });
     }
 
     let runDir;
@@ -72,7 +74,9 @@ app.post("/predict", async (req, res, next) => {
     } else {
       runDir = await getLatestRunDir(config.artifactsDir);
       if (!runDir) {
-        return res.status(400).json({ error: "No trained runs found in artifacts directory" });
+        return res
+          .status(400)
+          .json({ error: 'No trained runs found in artifacts directory' });
       }
     }
 
@@ -93,7 +97,7 @@ app.post("/predict", async (req, res, next) => {
 app.use((err, req, res, next) => {
   const status = err.status || 500;
   res.status(status).json({
-    error: err.message || "Internal Server Error",
+    error: err.message || 'Internal Server Error',
     stderr: err.stderr,
     stdout: err.stdout,
   });

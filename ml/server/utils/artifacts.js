@@ -1,5 +1,5 @@
-const fs = require("fs/promises");
-const path = require("path");
+const fs = require('fs/promises');
+const path = require('path');
 
 // Lists timestamped run directories inside the artifacts folder.
 async function listRunDirectories(artifactsDir) {
@@ -11,7 +11,7 @@ async function listRunDirectories(artifactsDir) {
       .sort()
       .reverse();
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (error.code === 'ENOENT') {
       return [];
     }
     throw error;
@@ -30,7 +30,7 @@ async function ensureRunExists(artifactsDir, runId) {
       return candidate;
     }
   } catch (error) {
-    if (error.code !== "ENOENT") {
+    if (error.code !== 'ENOENT') {
       throw error;
     }
   }
@@ -46,8 +46,8 @@ async function getLatestRunDir(artifactsDir) {
 }
 
 async function readMetadata(runDir) {
-  const filePath = path.join(runDir, "metadata.json");
-  const contents = await fs.readFile(filePath, "utf-8");
+  const filePath = path.join(runDir, 'metadata.json');
+  const contents = await fs.readFile(filePath, 'utf-8');
   return JSON.parse(contents);
 }
 

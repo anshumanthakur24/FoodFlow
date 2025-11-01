@@ -132,15 +132,15 @@ Response (truncated):
 
 ```json
 {
-   "count": 1,
-   "results": [
-      {
-         "state": "Maharashtra",
-         "district": "Pune",
-         "cluster_id": 2,
-         "anomaly_score": 0.17,
-         "is_anomaly": 0
-      }
-   ]
+  "count": 1,
+  "results": [
+    {
+      "state": "Maharashtra",
+      "district": "Pune",
+      "cluster_id": 2,
+      "anomaly_score": 0.17,
+      "is_anomaly": 0
+    }
+  ]
 }
 ```
