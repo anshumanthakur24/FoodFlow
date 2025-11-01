@@ -1,13 +1,7 @@
-*.xls
-*.cvs
-*.xlsx
-
 venv
-
-skipped_rows.json
-
 node_modules
 
-*.env
-
+skipped_rows.json
 package-lock.json
+
+*.env

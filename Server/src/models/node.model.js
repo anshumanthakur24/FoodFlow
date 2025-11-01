@@ -1,48 +1,47 @@
 import mongoose from "mongoose";
 
 const nodeSchema = new mongoose.Schema({
-    nodeId: {
-        type: String,
-        required: true,
-        unique: true
-    },
+  nodeId: {
+    type: String,
+    required: true,
+    unique: true,
+  },
+  type: {
+    type: String,
+    enum: ["farm", "warehouse", "ngo", "processing"],
+    required: true,
+  },
+  name: {
+    type: String,
+    required: true,
+  },
+  regionId: {
+    type: String,
+    required: true,
+  },
+  district: {
+    type: String,
+    required: true,
+  },
+  location: {
     type: {
-        type: String,
-        enum: ['farm', 'warehouse', 'ngo', 'processing'],
-        required: true
+      type: String,
+      enum: ["Point"],
+      default: "Point",
     },
-    name: {
-        type: String,
-        required: true
+    coordinates: {
+      type: [Number],
+      required: true,
     },
-    regionId: {
-        type: String,
-        required: true
-    },
-    district:{
-        type: String,
-        required: true
-    },
-    location: {
-        type: {
-            type: String,
-            enum: ['Point'],
-            default: 'Point'
-        },
-        coordinates: {
-            type: [Number],
-            required: true
-        }
-    },
-    capacity_kg: {
-        type: Number,
-        default: 0
-    },
-    contact: {
-        type: String
-    }
+  },
+  capacity_kg: {
+    type: Number,
+    default: 0,
+  },
+  contact: {
+    type: String,
+  },
 });
-nodeSchema.index({ location: '2dsphere' });
-
+nodeSchema.index({ location: "2dsphere" });
 
 export const Node = mongoose.model("Node", nodeSchema);

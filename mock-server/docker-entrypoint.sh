@@ -49,9 +49,7 @@ done
 log "MongoDB connection verified."
 
 if [ "${SKIP_DATA_SETUP:-0}" != "1" ]; then
-  log "Running auto-download.py"
   pushd /app/mock-data > /dev/null
-  python3 auto-download.py
   log "Running excel-to-mongo.py"
   python3 excel-to-mongo.py --folder ./crop-generation-data --mongo-uri "${MONGO_URI}" --db "${MONGO_DB}"
   log "Running infer-seasons.py"
