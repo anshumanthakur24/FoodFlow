@@ -50,6 +50,44 @@ function normalizeProbabilities(input) {
   };
 }
 
+const DEFAULT_TIME_ADVANCE_MIN_MINUTES = 240;
+const DEFAULT_TIME_ADVANCE_MAX_MINUTES = 1440;
+
+function normalizeTimeAdvance(input) {
+  const defaults = {
+    minMinutes: DEFAULT_TIME_ADVANCE_MIN_MINUTES,
+    maxMinutes: DEFAULT_TIME_ADVANCE_MAX_MINUTES,
+  };
+  if (input === null || input === undefined) {
+    return { ...defaults };
+  }
+  if (typeof input === 'number' && Number.isFinite(input) && input > 0) {
+    const minutes = Math.floor(input);
+    return { minMinutes: minutes, maxMinutes: minutes };
+  }
+  if (typeof input === 'object') {
+    const minCandidate = Math.floor(
+      Number(input.min || input.minMinutes || input.minimumMinutes || 0)
+    );
+    const maxCandidate = Math.floor(
+      Number(input.max || input.maxMinutes || input.maximumMinutes || 0)
+    );
+    const sanitizedMin =
+      Number.isFinite(minCandidate) && minCandidate > 0
+        ? minCandidate
+        : defaults.minMinutes;
+    const sanitizedMax =
+      Number.isFinite(maxCandidate) && maxCandidate > 0
+        ? maxCandidate
+        : defaults.maxMinutes;
+    if (sanitizedMin <= sanitizedMax) {
+      return { minMinutes: sanitizedMin, maxMinutes: sanitizedMax };
+    }
+    return { minMinutes: sanitizedMax, maxMinutes: sanitizedMin };
+  }
+  return { ...defaults };
+}
+
 function buildRequestLifecycleUrl(template, requestId) {
   if (!template) return null;
   const encoded = encodeURIComponent(requestId);
@@ -274,13 +312,49 @@ function nodeToEmittedFrom(node) {
   };
 }
 
-function deriveEventTimestamp(runtime, tickTimestamp, eventIndex) {
-  if (runtime.batchSize <= 1) return new Date(tickTimestamp.getTime());
-  const spacing = Math.max(
-    1,
-    Math.floor(runtime.intervalMs / runtime.batchSize)
+function deriveEventTimestamp(runtime, tickTimestamp, _eventIndex, timeRng) {
+  const tickTimeMs =
+    tickTimestamp instanceof Date && !Number.isNaN(tickTimestamp.getTime())
+      ? tickTimestamp.getTime()
+      : Date.now();
+  const previous =
+    runtime.lastEventTimestamp instanceof Date
+      ? new Date(runtime.lastEventTimestamp.getTime())
+      : null;
+  const timeAdvance = runtime.timeAdvance || normalizeTimeAdvance();
+  const minMinutes = Math.max(
+    Number(timeAdvance.minMinutes) || DEFAULT_TIME_ADVANCE_MIN_MINUTES,
+    1
   );
-  return new Date(tickTimestamp.getTime() + spacing * eventIndex);
+  const maxMinutesCandidate = Math.max(
+    Number(timeAdvance.maxMinutes) || minMinutes,
+    minMinutes
+  );
+  const minMs = minMinutes * 60000;
+  const maxMs = maxMinutesCandidate * 60000;
+
+  let nextMs;
+  if (!previous) {
+    const baseMs =
+      runtime.simulatedCursor instanceof Date &&
+      !Number.isNaN(runtime.simulatedCursor.getTime())
+        ? runtime.simulatedCursor.getTime()
+        : tickTimeMs;
+    nextMs = Math.max(baseMs, tickTimeMs);
+  } else {
+    const span = Math.max(0, maxMs - minMs);
+    const randomOffset =
+      span > 0
+        ? Math.floor((timeRng ? timeRng() : Math.random()) * (span + 1))
+        : 0;
+    const candidate = previous.getTime() + minMs + randomOffset;
+    nextMs = Math.max(candidate, tickTimeMs);
+  }
+
+  const next = new Date(nextMs);
+  runtime.previousEventTimestamp = previous;
+  runtime.lastEventTimestamp = next;
+  return { previous, next };
 }
 
 function parseCropYear(sourceFile, fallbackDate) {
@@ -371,9 +445,13 @@ function buildFarmPayload(
     name: region.name || region.district || region.state || regionCode,
     state: region.state || null,
     district: region.district || null,
-    location: coords && typeof coords.lat === 'number' && typeof coords.lon === 'number'
-      ? { lat: Number(coords.lat.toFixed(6)), lon: Number(coords.lon.toFixed(6)) }
-      : null,
+    location:
+      coords && typeof coords.lat === 'number' && typeof coords.lon === 'number'
+        ? {
+            lat: Number(coords.lat.toFixed(6)),
+            lon: Number(coords.lon.toFixed(6)),
+          }
+        : null,
   };
   const batch = {
     parentBatchId: null,
@@ -988,24 +1066,39 @@ async function generateEvents(runtime, tickTimestamp) {
   for (let i = 0; i < runtime.batchSize; i += 1) {
     const eventKey = `${baseKey}:${i}`;
     const rng = seedrandom(eventKey);
-    const eventTimestamp = deriveEventTimestamp(runtime, tickTimestamp, i);
+    const timeRng = seedrandom(`${eventKey}:time`);
+    const { previous: previousTimestamp, next: eventTimestamp } =
+      deriveEventTimestamp(runtime, tickTimestamp, i, timeRng);
     const roll = rng();
     let event;
     const farmThreshold = runtime.probabilities.farm || 0;
     const requestThreshold =
       farmThreshold + (runtime.probabilities.request || 0);
     if (roll < farmThreshold) {
-      event = await createFarmEvent(runtime, rng, eventKey, eventTimestamp);
+      event = await createFarmEvent(
+        runtime,
+        rng,
+        eventKey,
+        eventTimestamp,
+        previousTimestamp
+      );
     } else {
       if (roll < requestThreshold) {
-        event = createRequestEvent(runtime, rng, eventKey, eventTimestamp);
+        event = createRequestEvent(
+          runtime,
+          rng,
+          eventKey,
+          eventTimestamp,
+          previousTimestamp
+        );
       }
       if (!event) {
         event = await createFarmEvent(
           runtime,
           rng,
           `${eventKey}:fallback`,
-          eventTimestamp
+          eventTimestamp,
+          previousTimestamp
         );
       }
     }

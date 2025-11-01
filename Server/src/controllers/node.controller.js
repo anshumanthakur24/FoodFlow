@@ -288,9 +288,9 @@ const startScenario = asyncHandler(async (req, res) => {
         "⚠️ No NGOs found in the database — continuing without NGOs."
       );
     }
-
+    console.log(nodes[0]);
     const formattedNodes = nodes.map((node, index) => ({
-      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(
+      nodeId: `${node?.type?.toUpperCase()}-${String(index + 1)?.padStart(
         3,
         "0"
       )}`,
