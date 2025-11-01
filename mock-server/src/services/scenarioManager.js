@@ -50,6 +50,32 @@ function normalizeProbabilities(input) {
   }, {});
 }
 
+function buildRequestLifecycleUrl(template, requestId) {
+  if (!template) return null;
+  const encoded = encodeURIComponent(requestId);
+  const placeholders = [
+    '{requestId}',
+    '{REQUEST_ID}',
+    '{id}',
+    ':requestID',
+    ':requestId',
+    ':id',
+  ];
+  let route = template;
+  let replaced = false;
+  for (const token of placeholders) {
+    if (route.includes(token)) {
+      route = route.replace(token, encoded);
+      replaced = true;
+    }
+  }
+  if (!replaced) {
+    const base = route.endsWith('/') ? route.slice(0, -1) : route;
+    route = `${base}/${encoded}`;
+  }
+  return route;
+}
+
 function createAdhocRegions(filterList) {
   return filterList.map((value, index) => ({
     name: value,
@@ -567,7 +593,9 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
         86400000
     )
   );
-  const history = [
+  ledgerEntry.approvedOn = acceptanceTimestamp;
+  ledgerEntry.status = 'approved';
+  ledgerEntry.history = [
     ...ledgerEntry.history,
     {
       time: acceptanceTimestamp.toISOString(),
@@ -575,42 +603,112 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
       note: `Request approved after ${daysOpen} day(s)`,
     },
   ];
-  ledgerEntry.history = history;
-  ledgerEntry.status = 'approved';
-  ledgerEntry.acceptedAt = acceptanceTimestamp;
   runtime.requestLedger.set(ledgerEntry.requestId, ledgerEntry);
 
   const payload = {
     requestId: ledgerEntry.requestId,
     status: 'approved',
     approvedOn: acceptanceTimestamp.toISOString(),
-    fulfilledBy: ledgerEntry.fulfilledBy || null,
-    history,
-    metadata: {
-      scenarioId: runtime.scenario._id.toString(),
-      tickIndex: runtime.tickIndex,
-      requester: ledgerEntry.requesterDetails,
-      fulfilledBy: ledgerEntry.fulfilledByDetails || null,
-      daysOpen,
-    },
+  };
+
+  const metadata = {
+    scenarioId: runtime.scenario._id.toString(),
+    tickIndex: runtime.tickIndex,
+    requester: ledgerEntry.requesterDetails,
+    fulfilledBy: ledgerEntry.fulfilledByDetails || null,
+    daysOpen,
   };
 
   if (ledgerEntry.requiredBefore) {
     payload.requiredBefore = ledgerEntry.requiredBefore.toISOString();
   }
+  if (ledgerEntry.fulfilledBy) {
+    payload.fulfilledBy = ledgerEntry.fulfilledBy;
+  }
+
+  const urlPath = buildRequestLifecycleUrl(
+    MAIN_API_ROUTES.requestApproveTemplate,
+    ledgerEntry.requestId
+  );
 
   return {
-    type: 'requestAccepted',
+    type: 'requestApproved',
     timestamp: acceptanceTimestamp,
     record: {
       scenarioId: runtime.scenario._id,
-      type: 'requestAccepted',
-      payload,
+      type: 'requestApproved',
+      payload: { ...payload, metadata },
       tickIndex: runtime.tickIndex,
       timestamp: acceptanceTimestamp,
     },
     apiRequest: {
-      url: `${MAIN_API_URL}${MAIN_API_ROUTES.requestAccept}`,
+      url: `${MAIN_API_URL}${urlPath}`,
+      body: payload,
+    },
+  };
+}
+
+function createRequestFulfilledEvent(runtime, ledgerEntry) {
+  if (!ledgerEntry || !ledgerEntry.fulfillAt) return null;
+  const fulfillmentTimestamp = ledgerEntry.fulfillAt;
+  const hoursOpen = Math.max(
+    0,
+    Math.round(
+      (fulfillmentTimestamp.getTime() - ledgerEntry.createdOn.getTime()) /
+        3600000
+    )
+  );
+  ledgerEntry.status = 'fulfilled';
+  ledgerEntry.history = [
+    ...ledgerEntry.history,
+    {
+      time: fulfillmentTimestamp.toISOString(),
+      action: 'fulfilled',
+      note:
+        `Request fulfilled after ${hoursOpen} hour(s)` +
+        (ledgerEntry.fulfilledByDetails && ledgerEntry.fulfilledByDetails.name
+          ? ` by ${ledgerEntry.fulfilledByDetails.name}`
+          : ''),
+    },
+  ];
+  runtime.requestLedger.set(ledgerEntry.requestId, ledgerEntry);
+
+  const payload = {
+    requestId: ledgerEntry.requestId,
+    status: 'fulfilled',
+    fulfilledBy: ledgerEntry.fulfilledBy || null,
+    approvedOn: (ledgerEntry.approvedOn || fulfillmentTimestamp).toISOString(),
+    fullFilledOn: fulfillmentTimestamp.toISOString(),
+  };
+
+  const metadata = {
+    scenarioId: runtime.scenario._id.toString(),
+    tickIndex: runtime.tickIndex,
+    requester: ledgerEntry.requesterDetails,
+    fulfilledBy: ledgerEntry.fulfilledByDetails || null,
+    approvedOn: ledgerEntry.approvedOn
+      ? ledgerEntry.approvedOn.toISOString()
+      : null,
+    hoursOpen,
+  };
+
+  const urlPath = buildRequestLifecycleUrl(
+    MAIN_API_ROUTES.requestFulfillTemplate,
+    ledgerEntry.requestId
+  );
+
+  return {
+    type: 'requestFulfilled',
+    timestamp: fulfillmentTimestamp,
+    record: {
+      scenarioId: runtime.scenario._id,
+      type: 'requestFulfilled',
+      payload: { ...payload, metadata },
+      tickIndex: runtime.tickIndex,
+      timestamp: fulfillmentTimestamp,
+    },
+    apiRequest: {
+      url: `${MAIN_API_URL}${urlPath}`,
       body: payload,
     },
   };
@@ -685,53 +783,66 @@ function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
     items,
     history: [...history],
     status: 'pending',
+    acceptAt: null,
+    fulfillAt: null,
+    fulfilledBy: null,
+    fulfilledByDetails: null,
+    approvedOn: null,
   };
 
   const acceptanceChance = 0.65;
+  runtime.requestLedger.set(requestId, ledgerEntry);
+  runtime.openRequests.set(requestId, ledgerEntry);
+
   if (rng() < acceptanceChance) {
     const minDays = 1;
     const maxDays = 6;
     const dayOffset = minDays + Math.floor(rng() * (maxDays - minDays + 1));
     const acceptAt = new Date(eventTimestamp.getTime() + dayOffset * 86400000);
     ledgerEntry.acceptAt = acceptAt;
-    const fulfillCandidate = chooseFulfillmentCandidate(runtime, rng);
-    if (fulfillCandidate) {
-      if (fulfillCandidate.nodeId) {
-        ledgerEntry.fulfilledBy = pseudoObjectId(
-          `node:${fulfillCandidate.nodeId}`
-        );
-        ledgerEntry.fulfilledByDetails = nodeToEmittedFrom(fulfillCandidate);
-      } else {
+    const fulfillChance = 0.7;
+    if (rng() < fulfillChance) {
+      const fulfillCandidate = chooseFulfillmentCandidate(runtime, rng);
+      if (fulfillCandidate) {
+        const minHours = 4;
+        const maxHours = 48;
+        const hourOffset = minHours + rng() * (maxHours - minHours);
+        const fulfillAt = new Date(acceptAt.getTime() + hourOffset * 3600000);
         const coords = extractCoordinates(fulfillCandidate);
         const hasCoords =
           coords &&
           typeof coords.lat === 'number' &&
           typeof coords.lon === 'number';
-        ledgerEntry.fulfilledBy = pseudoObjectId(
-          `warehouse:${
-            fulfillCandidate.code || fulfillCandidate.name || requestId
-          }`
-        );
-        ledgerEntry.fulfilledByDetails = {
-          nodeId: fulfillCandidate.code || fulfillCandidate.name || null,
-          type: fulfillCandidate.type || 'warehouse',
-          name: fulfillCandidate.name || null,
-          state: fulfillCandidate.state || null,
-          district: fulfillCandidate.district || null,
-          location: hasCoords
-            ? {
-                lat: Number(coords.lat.toFixed(6)),
-                lon: Number(coords.lon.toFixed(6)),
-              }
-            : null,
-        };
+        if (fulfillCandidate.nodeId) {
+          ledgerEntry.fulfilledBy = pseudoObjectId(
+            `node:${fulfillCandidate.nodeId}`
+          );
+          ledgerEntry.fulfilledByDetails = nodeToEmittedFrom(fulfillCandidate);
+        } else {
+          ledgerEntry.fulfilledBy = pseudoObjectId(
+            `warehouse:${
+              fulfillCandidate.code || fulfillCandidate.name || requestId
+            }`
+          );
+          ledgerEntry.fulfilledByDetails = {
+            nodeId: fulfillCandidate.code || fulfillCandidate.name || null,
+            type: fulfillCandidate.type || 'warehouse',
+            name: fulfillCandidate.name || null,
+            state: fulfillCandidate.state || null,
+            district: fulfillCandidate.district || null,
+            location: hasCoords
+              ? {
+                  lat: Number(coords.lat.toFixed(6)),
+                  lon: Number(coords.lon.toFixed(6)),
+                }
+              : null,
+          };
+        }
+        ledgerEntry.fulfillAt = fulfillAt;
       }
     }
-    runtime.pendingRequests.push(ledgerEntry);
-  } else {
-    runtime.openRequests.set(requestId, ledgerEntry);
+    runtime.pendingApprovals.push(ledgerEntry);
   }
-  runtime.requestLedger.set(requestId, ledgerEntry);
 
   return {
     type: 'request',
@@ -744,36 +855,52 @@ function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
       timestamp: eventTimestamp,
     },
     apiRequest: {
-      url: `${MAIN_API_URL}${MAIN_API_ROUTES.request}`,
+      url: `${MAIN_API_URL}${MAIN_API_ROUTES.requestCreate}`,
       body: payload,
     },
   };
 }
 
-function collectRequestAcceptanceEvents(runtime, tickTimestamp) {
-  if (!runtime.pendingRequests.length) return [];
+function collectRequestLifecycleEvents(runtime, tickTimestamp) {
   const ready = [];
-  const waiting = [];
-  for (const entry of runtime.pendingRequests) {
-    if (entry.acceptAt && entry.acceptAt <= tickTimestamp) {
-      const event = createRequestAcceptanceEvent(runtime, entry);
-      if (event) ready.push(event);
-      runtime.openRequests.delete(entry.requestId);
-    } else {
-      waiting.push(entry);
+
+  if (runtime.pendingApprovals.length) {
+    const waitingApprovals = [];
+    for (const entry of runtime.pendingApprovals) {
+      if (entry.acceptAt && entry.acceptAt <= tickTimestamp) {
+        const approvalEvent = createRequestAcceptanceEvent(runtime, entry);
+        if (approvalEvent) ready.push(approvalEvent);
+        runtime.openRequests.delete(entry.requestId);
+        if (entry.fulfillAt) {
+          runtime.pendingFulfillments.push(entry);
+        }
+      } else {
+        waitingApprovals.push(entry);
+      }
     }
+    runtime.pendingApprovals = waitingApprovals;
   }
-  runtime.pendingRequests = waiting;
+
+  if (runtime.pendingFulfillments.length) {
+    const waitingFulfillments = [];
+    for (const entry of runtime.pendingFulfillments) {
+      if (entry.fulfillAt && entry.fulfillAt <= tickTimestamp) {
+        const fulfillmentEvent = createRequestFulfilledEvent(runtime, entry);
+        if (fulfillmentEvent) ready.push(fulfillmentEvent);
+      } else {
+        waitingFulfillments.push(entry);
+      }
+    }
+    runtime.pendingFulfillments = waitingFulfillments;
+  }
+
   return ready;
 }
 
 async function generateEvents(runtime, tickTimestamp) {
   const events = [];
-  const acceptanceEvents = collectRequestAcceptanceEvents(
-    runtime,
-    tickTimestamp
-  );
-  if (acceptanceEvents.length) events.push(...acceptanceEvents);
+  const lifecycleEvents = collectRequestLifecycleEvents(runtime, tickTimestamp);
+  if (lifecycleEvents.length) events.push(...lifecycleEvents);
   const baseKey = `${runtime.scenario.seed}:${runtime.scenario._id}:${runtime.tickIndex}`;
   for (let i = 0; i < runtime.batchSize; i += 1) {
     const eventKey = `${baseKey}:${i}`;
@@ -906,7 +1033,8 @@ function createRuntime(scenario, options) {
     farmNodes: [],
     ngoNodes: [],
     farmInventory: [],
-    pendingRequests: [],
+    pendingApprovals: [],
+    pendingFulfillments: [],
     requestLedger: new Map(),
     openRequests: new Map(),
     cropCache: new Map(),
@@ -917,7 +1045,8 @@ function createRuntime(scenario, options) {
         runtime.timer = null;
       }
       runtime.active = false;
-      runtime.pendingRequests = [];
+      runtime.pendingApprovals = [];
+      runtime.pendingFulfillments = [];
       runtime.requestLedger.clear();
       runtime.openRequests.clear();
       runtime.farmInventory = [];
@@ -950,7 +1079,8 @@ function createRuntime(scenario, options) {
     runtime.startedAt = Date.now();
     runtime.tickIndex = 0;
     runtime.active = true;
-    runtime.pendingRequests = [];
+    runtime.pendingApprovals = [];
+    runtime.pendingFulfillments = [];
     runtime.requestLedger.clear();
     runtime.openRequests.clear();
     runtime.farmInventory = [];
