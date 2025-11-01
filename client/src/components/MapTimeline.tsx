@@ -1,20 +1,22 @@
-'use client';
+"use client";
 
-import { useEffect, useState, useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import AnimatedPolyline from './AnimatedPolyline';
-import AnimatedTransitMarker from './AnimatedTransitMarker';
-import { Node, Shipment, Event } from '@/data/sampleFoodData';
+import { useEffect, useState, useMemo } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+import AnimatedPolyline from "./AnimatedPolyline";
+import AnimatedTransitMarker from "./AnimatedTransitMarker";
+import type { Node, Shipment, Event } from "@/data/sampleFoodData";
 
 // Fix for default marker icons in Next.js
-if (typeof window !== 'undefined') {
+if (typeof window !== "undefined") {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   delete (L.Icon.Default.prototype as any)._getIconUrl;
   L.Icon.Default.mergeOptions({
-    iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-    iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-    shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    iconRetinaUrl:
+      "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   });
 }
 
@@ -22,7 +24,7 @@ interface MapTimelineProps {
   nodes: Node[];
   events: Event[];
   shipments: Shipment[];
-  shipmentLocationUpdates: any[];
+  shipmentLocationUpdates: unknown[];
   currentTime: Date;
   startTime: Date;
   endTime: Date;
@@ -45,10 +47,7 @@ export default function MapTimeline({
   nodes,
   events,
   shipments,
-  shipmentLocationUpdates,
   currentTime,
-  startTime,
-  endTime,
 }: MapTimelineProps) {
   const [bounds, setBounds] = useState<L.LatLngBounds | null>(null);
 
@@ -72,8 +71,10 @@ export default function MapTimeline({
     return shipments.filter((shipment) => shipment.startTime <= currentTime);
   }, [shipments, currentTime]);
 
-  // Calculate bounds
-  useEffect(() => {
+  // Calculate bounds using useMemo to avoid effect issues
+  const calculatedBounds = useMemo(() => {
+    if (nodes.length === 0 && events.length === 0) return null;
+
     const allPoints: [number, number][] = [];
     nodes.forEach((node) => {
       allPoints.push([node.lat, node.lng]);
@@ -83,41 +84,49 @@ export default function MapTimeline({
     });
 
     if (allPoints.length > 0) {
-      const newBounds = L.latLngBounds(allPoints);
-      setBounds(newBounds);
+      return L.latLngBounds(allPoints);
     }
+    return null;
   }, [nodes, events]);
+
+  // Update bounds state when calculated bounds change
+  useEffect(() => {
+    if (calculatedBounds && (!bounds || !bounds.equals(calculatedBounds))) {
+      setBounds(calculatedBounds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calculatedBounds]);
 
   // Get node type color and emoji
   const getNodeStyle = (type: string) => {
     const styles: Record<string, { color: string; emoji: string }> = {
-      farm: { color: '#22c55e', emoji: '🌾' },
-      processing: { color: '#3b82f6', emoji: '🏭' },
-      warehouse: { color: '#f59e0b', emoji: '📦' },
-      ngo: { color: '#ef4444', emoji: '❤️' },
+      farm: { color: "#22c55e", emoji: "🌾" },
+      processing: { color: "#3b82f6", emoji: "🏭" },
+      warehouse: { color: "#f59e0b", emoji: "📦" },
+      ngo: { color: "#ef4444", emoji: "❤️" },
     };
-    return styles[type] || { color: '#6b7280', emoji: '📍' };
+    return styles[type] || { color: "#6b7280", emoji: "📍" };
   };
 
   // Get event type color
   const getEventColor = (type: string) => {
     const colors: Record<string, string> = {
-      farm_production: '#22c55e',
-      shipment_created: '#3b82f6',
-      shipment_location_update: '#f59e0b',
-      shipment_arrived: '#10b981',
-      ngo_request: '#ef4444',
-      batch_spoiled: '#dc2626',
-      prediction_made: '#8b5cf6',
+      farm_production: "#22c55e",
+      shipment_created: "#3b82f6",
+      shipment_location_update: "#f59e0b",
+      shipment_arrived: "#10b981",
+      ngo_request: "#ef4444",
+      batch_spoiled: "#dc2626",
+      prediction_made: "#8b5cf6",
     };
-    return colors[type] || '#6b7280';
+    return colors[type] || "#6b7280";
   };
 
   // Create node icon
   const createNodeIcon = (type: string) => {
     const style = getNodeStyle(type);
     return L.divIcon({
-      className: 'node-marker',
+      className: "node-marker",
       html: `
         <div style="
           background-color: ${style.color};
@@ -141,7 +150,7 @@ export default function MapTimeline({
   const createEventIcon = (type: string) => {
     const color = getEventColor(type);
     return L.divIcon({
-      className: 'event-marker',
+      className: "event-marker",
       html: `
         <div style="
           background-color: ${color};
@@ -158,8 +167,12 @@ export default function MapTimeline({
     });
   };
 
-  if (typeof window === 'undefined') {
-    return <div className="w-full h-full bg-gray-100 flex items-center justify-center">Loading map...</div>;
+  if (typeof window === "undefined") {
+    return (
+      <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+        Loading map...
+      </div>
+    );
   }
 
   const defaultCenter: [number, number] = [39.8283, -98.5795]; // US Center
@@ -170,7 +183,7 @@ export default function MapTimeline({
       <MapContainer
         center={defaultCenter}
         zoom={defaultZoom}
-        style={{ height: '100%', width: '100%', zIndex: 1 }}
+        style={{ height: "100%", width: "100%", zIndex: 1 }}
         className="rounded-lg"
       >
         <TileLayer
@@ -191,7 +204,7 @@ export default function MapTimeline({
             <AnimatedPolyline
               key={shipment.id}
               positions={path}
-              color={isActive ? '#f59e0b' : '#94a3b8'}
+              color={isActive ? "#f59e0b" : "#94a3b8"}
               weight={isActive ? 4 : 2}
               opacity={isActive ? 0.8 : 0.4}
               animated={isActive}
@@ -225,7 +238,7 @@ export default function MapTimeline({
         {/* Render events */}
         {visibleEvents.map((event) => {
           // Skip location updates as they're shown by transit markers
-          if (event.type === 'shipment_location_update') return null;
+          if (event.type === "shipment_location_update") return null;
 
           return (
             <Marker
@@ -236,14 +249,15 @@ export default function MapTimeline({
               <Popup>
                 <div className="p-2">
                   <h3 className="font-semibold text-lg mb-1">
-                    Event: {event.type.replace(/_/g, ' ').toUpperCase()}
+                    Event: {event.type.replace(/_/g, " ").toUpperCase()}
                   </h3>
                   <p className="text-sm text-gray-600 mb-1">
-                    <span className="font-medium">Time:</span>{' '}
+                    <span className="font-medium">Time:</span>{" "}
                     {event.time.toLocaleTimeString()}
                   </p>
                   <p className="text-sm text-gray-600 mb-1">
-                    <span className="font-medium">Event ID:</span> {event.eventId}
+                    <span className="font-medium">Event ID:</span>{" "}
+                    {event.eventId}
                   </p>
                   {event.payload && (
                     <div className="text-xs text-gray-500 mt-2">
@@ -271,22 +285,6 @@ export default function MapTimeline({
         ))}
       </MapContainer>
 
-      {/* Stats overlay */}
-      <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-3 z-[1000] border border-gray-200">
-        <div className="text-sm space-y-2">
-          <div>
-            <div className="font-semibold text-gray-900 mb-1">Active Shipments</div>
-            <div className="text-2xl font-bold text-amber-600">{activeShipments.length}</div>
-            <div className="text-xs text-gray-500 mt-1">of {shipments.length} total</div>
-          </div>
-          <div className="pt-2 border-t border-gray-200">
-            <div className="font-semibold text-gray-900 mb-1">Events</div>
-            <div className="text-2xl font-bold text-blue-600">{visibleEvents.length}</div>
-            <div className="text-xs text-gray-500 mt-1">of {events.length} total</div>
-          </div>
-        </div>
-      </div>
-
       <style jsx global>{`
         .node-marker,
         .event-marker {
@@ -300,7 +298,8 @@ export default function MapTimeline({
         }
 
         @keyframes pulse {
-          0%, 100% {
+          0%,
+          100% {
             transform: scale(1);
             opacity: 1;
           }

@@ -19,8 +19,10 @@ const nodeSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  state: String,
-  district: String,
+  district: {
+    type: String,
+    required: true,
+  },
   location: {
     type: {
       type: String,
