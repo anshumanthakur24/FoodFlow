@@ -1,13 +1,9 @@
 import mongoose from "mongoose";
 
 const batchSchema = new mongoose.Schema({
-    batchId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     parentBatchId: {
-        type: String,
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Batch",
         default: null
     },
     foodType: {

@@ -1,11 +1,6 @@
 import mongoose from "mongoose";
 
 const shipmentSchema = new mongoose.Schema({
-    shipmentId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     batchIds: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Batch'

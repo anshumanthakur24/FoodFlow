@@ -3,7 +3,6 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 import logger from "./middleware/logger.middleware.js";
 
-
 const app = express();
 app.use(cookieParser());
  
@@ -14,10 +13,13 @@ app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(express.static("public"))
+import {startScenario} from "./controllers/node.controller.js"
 
 // Logger middleware - should be after body parsers but before routes
 app.use(logger);
 
+
+app.use("/api/v1/startMock",startScenario);
 // Routes Import
 import eventRouter from "./routes/event.route.js";
 import mapRouter from "./routes/map.routes.js";
