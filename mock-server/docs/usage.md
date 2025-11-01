@@ -122,26 +122,22 @@ Build and launch the mock server alongside MongoDB with seeded reference data:
 
 The compose setup exposes an optional `MONGO_DB` environment variable that defaults to the database parsed from `MONGO_URI`. Setting `SKIP_DATA_SETUP=1` on the `mock-server` service skips the Python loaders if you already have seeded data.
 
-## Generate nodes from states/districts
+## Generate nodes from Mongo states/districts
 
-Use the helper to create farm/warehouse nodes ready for MongoDB:
+The generator now only needs your MongoDB to be running with the `agriculte.crops_history` collection populated:
 
 ```powershell
 cd "e:/Projects/Complete/Arcanix Hack on Hills/mock-server/mock-data"
 
-# From Mongo (example: agriculte.crops_history)
-node .\generate-nodes.js --from-mongo --mongo-uri "mongodb://127.0.0.1:27017/agriculte" --mongo-coll crops_history --output nodes.mongo.json
+# Generate nodes (writes nodes.mongo.json by default when you pass a filename)
+node .\generate-nodes.js .\nodes.mongo.json
 
-# From CSV
-node .\generate-nodes.js --input ..\..\ml\data\census2011.csv --states Maharashtra,Gujarat --output nodes.csv.json
-
-# Import
-mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file "nodes.mongo.json"
+# Import the generated JSON into the main API database
+mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file ".\nodes.mongo.json"
 ```
 
-Flags:
+Environment overrides (optional):
 
-- `--from-mongo` to load unique `(state,district)` from a collection.
-- `--mongo-uri`, `--mongo-db` (if not in URI), `--mongo-coll` (default `crops_history`).
-- `--state-field`, `--district-field` (defaults `state`, `district`).
-- `--min`, `--max` nodes per district (min effectively 6 to guarantee ≥3 of each type).
+- `MONGO_URI` (default `mongodb://127.0.0.1:27017/agriculte`)
+- `MONGO_DB` (default `agriculte`)
+- `MONGO_COLLECTION` (default `crops_history`)
