@@ -14,6 +14,7 @@ This module prepares historical demand features from MongoDB and trains two unsu
   docker compose up -d --build ml
   ```
 - Artifacts and CSV data are bind-mounted (`./ml/artifacts`, `./ml/data`) so training output persists on the host.
+- The container bakes its own virtual environment at `/opt/venv`; `PYTHON_BIN` inside `.env.docker` already points there.
 - For local development on Windows, keep using `.env`; Docker Compose automatically injects values from `.env.docker` for the container.
 
 ## Prerequisites

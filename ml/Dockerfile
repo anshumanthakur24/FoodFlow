@@ -18,15 +18,17 @@ RUN npm install --omit=dev
 
 # Install Python dependencies needed by src/* modules.
 COPY requirements.txt ./
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -r requirements.txt
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/python -m pip install --no-cache-dir --upgrade pip \
+    && /opt/venv/bin/python -m pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy the remaining application code (Node server and Python sources).
 COPY . .
 
 ENV NODE_ENV=production \
     PYTHONPATH=/app \
-    PYTHON_BIN=python
+    PATH=/opt/venv/bin:$PATH \
+    PYTHON_BIN=/opt/venv/bin/python
 
 EXPOSE 5050
 
