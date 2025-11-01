@@ -6,7 +6,7 @@ const router=Router();
 
 router.post("/createRequest", createRequest);
 router.patch("/:requestID/status", updateRequestStatus);
-router.get("/getAllRequets?:ngoId",getRequestsByNGO);
+router.get("/getAllRequets/:ngoId",getRequestsByNGO);
 
 
 
