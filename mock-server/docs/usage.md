@@ -40,6 +40,8 @@ Request creation events follow the main API schema. Each `request` payload inclu
 - For the majority of approved requests, POSTs to `MAIN_API_REQUEST_FULFILL_TEMPLATE` after an additional 4–48 simulation hours to mark them fulfilled (reusing the same `requestId`).
 
 Requests that are never approved remain tracked internally with `pending` status so the mock server can surface their history via the events collection.
+Request identifiers are deterministically derived from the scenario seed so that approval and fulfilment calls always reference the same value sent during creation.
+The simulator persists three event types in Mongo for this lifecycle: `request` (creation), `requestApproved`, and `requestFulfilled`.
 
 ## API Endpoints
 

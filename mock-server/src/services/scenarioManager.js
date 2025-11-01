@@ -37,17 +37,17 @@ function normalizeInterval(value) {
 }
 
 function normalizeProbabilities(input) {
-  const merged = { ...DEFAULT_PROBABILITIES, ...(input || {}) };
-  const entries = Object.entries(merged).map(([key, value]) => [
-    key,
-    Number(value) || 0,
-  ]);
-  const total = entries.reduce((acc, [, value]) => acc + value, 0);
+  const source = { ...DEFAULT_PROBABILITIES, ...(input || {}) };
+  const farm = Number(source.farm) || 0;
+  const requestAlias =
+    source.request ?? source.ngo ?? source.requests ?? source.aid ?? 0;
+  const request = Number(requestAlias) || 0;
+  const total = farm + request;
   if (!total || total <= 0) return { ...DEFAULT_PROBABILITIES };
-  return entries.reduce((acc, [key, value]) => {
-    acc[key] = value / total;
-    return acc;
-  }, {});
+  return {
+    farm: farm / total,
+    request: request / total,
+  };
 }
 
 function buildRequestLifecycleUrl(template, requestId) {
@@ -74,6 +74,60 @@ function buildRequestLifecycleUrl(template, requestId) {
     route = `${base}/${encoded}`;
   }
   return route;
+}
+
+function normalizeNgoProfiles(list) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((ngo, index) => {
+      if (!ngo || typeof ngo !== 'object') return null;
+      const name = typeof ngo.name === 'string' ? ngo.name.trim() : '';
+      const state = typeof ngo.state === 'string' ? ngo.state.trim() : null;
+      const district =
+        typeof ngo.district === 'string' ? ngo.district.trim() : null;
+      const address =
+        typeof ngo.address === 'string' ? ngo.address.trim() : null;
+      const contact = ngo.contact && typeof ngo.contact === 'object'
+        ? {
+            person:
+              typeof ngo.contact.person === 'string'
+                ? ngo.contact.person.trim()
+                : null,
+            email:
+              typeof ngo.contact.email === 'string'
+                ? ngo.contact.email.trim()
+                : null,
+            phone:
+              typeof ngo.contact.phone === 'string'
+                ? ngo.contact.phone.trim()
+                : null,
+          }
+        : { person: null, email: null, phone: null };
+      const externalIdRaw =
+        typeof ngo.ngoId === 'string' && ngo.ngoId.trim().length
+          ? ngo.ngoId.trim()
+          : name || `${state || 'state'}-${district || index}`;
+      const mongoId = pseudoObjectId(`ngo:${externalIdRaw}`);
+      return {
+        raw: ngo,
+        externalId: externalIdRaw,
+        mongoId,
+        name: name || `NGO ${index + 1}`,
+        address,
+        state,
+        district,
+        contact,
+        stats: {
+          pending: Number.isFinite(Number(ngo.pendingRequests))
+            ? Number(ngo.pendingRequests)
+            : 0,
+          total: Number.isFinite(Number(ngo.totalRequests))
+            ? Number(ngo.totalRequests)
+            : 0,
+        },
+      };
+    })
+    .filter(Boolean);
 }
 
 function createAdhocRegions(filterList) {
@@ -728,7 +782,7 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
 
 function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
   const requestKey = createEventId(`${eventKey}:request`);
-  const requestId = `REQ-${requestKey.slice(0, 12).toUpperCase()}`;
+  const requestId = `REQ-${requestKey.slice(0, 12).toUpperCase()}`; // stable id reused across approval/fulfilment
   const items = createRequestItems(rng);
 
   let requesterNodeId;
@@ -1039,6 +1093,7 @@ function createRuntime(scenario, options) {
     regionFilter: options.regionFilter,
     nodes: Array.isArray(options.nodes) ? options.nodes : [],
     nodeMode: Array.isArray(options.nodes) && options.nodes.length > 0,
+  ngoProfiles: normalizeNgoProfiles(options.ngos),
     active: false,
     timer: null,
     tickIndex: 0,
