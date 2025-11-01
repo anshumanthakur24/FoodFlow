@@ -9,16 +9,25 @@ if (fs.existsSync(envPath)) {
 const MAIN_API_URL = process.env.MAIN_API_URL || 'http://localhost:3001';
 const MAIN_API_ROUTES = {
   farm: process.env.MAIN_API_FARM_PATH || '/api/v1/event/farm',
-  shipment: process.env.MAIN_API_SHIPMENTS_PATH || '/api/v1/event/shipments', // Changed these because not required
-  ngo: process.env.MAIN_API_REQUESTS_PATH || '/api/v1/request', // Changed these because not required
+  requestCreate:
+    process.env.MAIN_API_REQUEST_CREATE_PATH ||
+    process.env.MAIN_API_REQUESTS_PATH ||
+    '/api/v1/request/createRequest',
+  requestApproveTemplate:
+    process.env.MAIN_API_REQUEST_APPROVE_TEMPLATE ||
+    '/api/v1/request/{requestId}/approved',
+  requestFulfillTemplate:
+    process.env.MAIN_API_REQUEST_FULFILL_TEMPLATE ||
+    '/api/v1/request/{requestId}/fulfilled',
 };
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/arcanix';
 const MAX_BATCH_SIZE = Number(process.env.SCENARIO_MAX_BATCH_SIZE || 200);
 const MIN_INTERVAL_MS = Number(process.env.SCENARIO_MIN_INTERVAL_MS || 500);
 const DEFAULT_PROBABILITIES = {
-  farm: Number(process.env.SCENARIO_PROB_FARM || 0.7),
-  shipment: Number(process.env.SCENARIO_PROB_SHIPMENT || 0.25),
-  ngo: Number(process.env.SCENARIO_PROB_NGO || 0.05),
+  farm: Number(process.env.SCENARIO_PROB_FARM ?? 0.7),
+  request: Number(
+    process.env.SCENARIO_PROB_REQUEST ?? process.env.SCENARIO_PROB_NGO ?? 0.3
+  ),
 };
 const MAIN_API_TIMEOUT_MS = Number(process.env.MAIN_API_TIMEOUT_MS || 10000);
 

@@ -18,18 +18,30 @@ Create a `.env` file in `mock-server/` with environment overrides as needed:
 ```
 PORT=5001
 MONGO_URI=mongodb://127.0.0.1:27017/arcanix
-MAIN_API_URL=http://localhost:4000
-MAIN_API_FARM_PATH=/api/farm-events
-MAIN_API_SHIPMENTS_PATH=/api/shipments
-MAIN_API_REQUESTS_PATH=/api/requests
+MAIN_API_URL=http://localhost:3001
+MAIN_API_FARM_PATH=/api/v1/event/farm
+MAIN_API_REQUEST_CREATE_PATH=/api/v1/request/createRequest
+MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestId}/approved
+MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestId}/fulfilled
 SCENARIO_MAX_BATCH_SIZE=200
 SCENARIO_MIN_INTERVAL_MS=500
-SCENARIO_PROB_FARM=0.7
-SCENARIO_PROB_SHIPMENT=0.25
-SCENARIO_PROB_NGO=0.05
+SCENARIO_PROB_FARM=0.65
+SCENARIO_PROB_REQUEST=0.35
 ```
 
 Any unset value falls back to the defaults above.
+
+## Request Lifecycle
+
+Request creation events follow the main API schema. Each `request` payload includes `requestId`, `requesterNode`, `items`, and lifecycle history. The simulator then:
+
+- POSTs to `MAIN_API_REQUEST_CREATE_PATH` when a request is created.
+- After a random 1–6 day delay, POSTs to `MAIN_API_REQUEST_APPROVE_TEMPLATE` (with `{requestId}` substituted) to mark the request as approved.
+- For the majority of approved requests, POSTs to `MAIN_API_REQUEST_FULFILL_TEMPLATE` after an additional 4–48 simulation hours to mark them fulfilled (reusing the same `requestId`).
+
+Requests that are never approved remain tracked internally with `pending` status so the mock server can surface their history via the events collection.
+Request identifiers are deterministically derived from the scenario seed so that approval and fulfilment calls always reference the same value sent during creation.
+The simulator persists three event types in Mongo for this lifecycle: `request` (creation), `requestApproved`, and `requestFulfilled`.
 
 ## API Endpoints
 
@@ -65,7 +77,7 @@ There are two ways to scope where events are emitted from:
     }
   ],
   "durationMinutes": 5,
-  "probabilities": { "farm": 0.7, "shipment": 0.25, "ngo": 0.05 }
+  "probabilities": { "farm": 0.65, "request": 0.35 }
 }
 ```
 
@@ -106,11 +118,13 @@ All emitted events now include an `emittedFrom` object inside the payload with t
       "state": "Maharashtra",
       "location": { "lat": 18.52, "lon": 73.86 }
     },
-    "batch": { "batchId": "...", "quantity_kg": 2500 },
+    "batch": { "quantity_kg": 2500 },
     "quantity_kg": 2500
   }
 }
 ```
+
+Request creation events follow the request schema published by the main API. Each `request` payload includes `requestId`, `requesterNode`, `items`, and lifecycle history, while a paired `requestAccepted` event is emitted automatically after a random delay (1–6 days) for most requests. Requests that are never approved remain in the simulator ledger and stay in `pending` status.
 
 ## Docker
 
