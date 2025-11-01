@@ -34,16 +34,18 @@ interface ApiNode {
   contact?: string;
 }
 
-const MOCK_DISTRICTS = [
-  "Mumbai",
-  "Delhi",
-  "Bangalore",
-  "Kolkata",
-  "Chennai",
-  "Hyderabad",
-  "Pune",
-  "Ahmedabad",
-];
+// const MOCK_DISTRICTS = [
+//   "Mumbai",
+//   "Delhi",
+//   "Bangalore",
+//   "Kolkata",
+//   "Chennai",
+//   "Hyderabad",
+//   "Pune",
+//   "Ahmedabad",
+// ];
+
+// fetching district data from backend
 
 const MOCK_DATA: Record<string, Node[]> = {
   Mumbai: [
@@ -114,6 +116,11 @@ export default function AdminDashboard() {
   const [allNodes, setAllNodes] = useState<Record<string, Node[]>>(MOCK_DATA);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [DISTRICTS, setMockDistricts] = useState<string[]>([]);
+
+  // District search state
+  const [districtSearchOpen, setDistrictSearchOpen] = useState(false);
+  const [districtSearchQuery, setDistrictSearchQuery] = useState("");
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -132,10 +139,41 @@ export default function AdminDashboard() {
     longitude: "",
   });
 
+  useEffect(() => {
+    const fetchDistricts = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/node/getAllDistricts`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch districts: ${response.statusText}`);
+        }
+        const result = await response.json();
+        setMockDistricts(result.data.districts);
+      } catch (err) {
+        console.error("Error fetching districts:", err);
+      }
+    };
+
+    fetchDistricts();
+  }, []);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (districtSearchOpen && !target.closest(".district-dropdown")) {
+        setDistrictSearchOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [districtSearchOpen]);
+
   // all nodes on initial render
 
   useEffect(() => {
     fetchNodes("", 1, itemsPerPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [itemsPerPage]);
 
   // Fetch nodes from API
@@ -440,26 +478,124 @@ export default function AdminDashboard() {
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
             {/* District Filter */}
-            <div className="flex items-center gap-2">
+            <div className="relative flex items-center gap-2 district-dropdown">
               <label
                 htmlFor="district"
                 className="text-sm font-medium text-zinc-700 dark:text-zinc-300"
               >
                 District
               </label>
-              <select
-                id="district"
-                value={selectedDistrict}
-                onChange={(e) => handleDistrictChange(e.target.value)}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
-              >
-                <option value="">All Districts</option>
-                {MOCK_DISTRICTS.map((district) => (
-                  <option key={district} value={district}>
-                    {district}
-                  </option>
-                ))}
-              </select>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setDistrictSearchOpen(!districtSearchOpen)}
+                  className="flex min-w-[200px] items-center justify-between gap-2 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 hover:border-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-600 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+                >
+                  <span className="truncate">
+                    {selectedDistrict || "All Districts"}
+                  </span>
+                  <svg
+                    className={`h-4 w-4 transition-transform ${districtSearchOpen ? "rotate-180" : ""}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 9l-7 7-7-7"
+                    />
+                  </svg>
+                </button>
+
+                {/* Dropdown Menu */}
+                {districtSearchOpen && (
+                  <div className="absolute left-0 top-full z-50 mt-1 w-[280px] rounded-lg border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                    {/* Search Input */}
+                    <div className="border-b border-zinc-200 p-2 dark:border-zinc-700">
+                      <div className="relative">
+                        <svg
+                          className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                          />
+                        </svg>
+                        <input
+                          type="text"
+                          placeholder="Search districts..."
+                          value={districtSearchQuery}
+                          onChange={(e) =>
+                            setDistrictSearchQuery(e.target.value)
+                          }
+                          className="w-full rounded border border-zinc-300 bg-white py-1.5 pl-9 pr-3 text-sm text-zinc-900 placeholder-zinc-400 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-500 dark:focus:border-zinc-500 dark:focus:ring-zinc-500"
+                        />
+                      </div>
+                    </div>
+
+                    {/* District List */}
+                    <div className="max-h-[300px] overflow-y-auto p-1">
+                      {/* All Districts Option */}
+                      <button
+                        onClick={() => {
+                          handleDistrictChange("");
+                          setDistrictSearchOpen(false);
+                          setDistrictSearchQuery("");
+                        }}
+                        className={`w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+                          selectedDistrict === ""
+                            ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
+                            : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        }`}
+                      >
+                        All Districts
+                      </button>
+
+                      {/* Filtered Districts */}
+                      {DISTRICTS.filter((district) =>
+                        district
+                          .toLowerCase()
+                          .includes(districtSearchQuery.toLowerCase())
+                      ).map((district) => (
+                        <button
+                          key={district}
+                          onClick={() => {
+                            handleDistrictChange(district);
+                            setDistrictSearchOpen(false);
+                            setDistrictSearchQuery("");
+                          }}
+                          className={`w-full rounded px-3 py-2 text-left text-sm transition-colors ${
+                            selectedDistrict === district
+                              ? "bg-zinc-100 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
+                              : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                          }`}
+                        >
+                          {district}
+                        </button>
+                      ))}
+
+                      {/* No results message */}
+                      {DISTRICTS.filter((district) =>
+                        district
+                          .toLowerCase()
+                          .includes(districtSearchQuery.toLowerCase())
+                      ).length === 0 &&
+                        districtSearchQuery && (
+                          <div className="px-3 py-2 text-center text-sm text-zinc-500 dark:text-zinc-400">
+                            No districts found
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Items Per Page Selector */}
@@ -1072,7 +1208,7 @@ export default function AdminDashboard() {
                     required
                   >
                     <option value="">Select district</option>
-                    {MOCK_DISTRICTS.map((district) => (
+                    {DISTRICTS.map((district) => (
                       <option key={district} value={district}>
                         {district}
                       </option>
