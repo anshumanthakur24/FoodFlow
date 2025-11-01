@@ -1,11 +1,6 @@
 import mongoose from "mongoose";
 
 const nodeSchema = new mongoose.Schema({
-  nodeId: {
-    type: String,
-    required: true,
-    unique: true,
-  },
   type: {
     type: String,
     enum: ["farm", "warehouse", "ngo", "processing"],

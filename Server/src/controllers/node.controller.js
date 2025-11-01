@@ -1,0 +1,165 @@
+import { asyncHandler } from "../utils/asyncHandler.js";
+import {ApiError} from "../utils/ApiError.js"
+import { ApiResponse } from "../utils/ApiResponse.js";
+import {Node} from "../models/node.model.js";
+
+const createNode = asyncHandler(async (req, res) => {
+  try {
+
+    const { type, name, regionId, district, location, capacity_kg, contact } = req.body;
+    if (!type || !name || !regionId || !district || !location) {
+      throw new ApiError(
+        400,
+        "Missing required fields. 'type', 'name', 'regionId', 'district', and 'location' are mandatory."
+      );
+    }
+
+    const validTypes = ["farm", "warehouse", "ngo", "processing"];
+    if (!validTypes.includes(type)) {
+      throw new ApiError(400, `Invalid node type '${type}'. Must be one of ${validTypes.join(", ")}.`);
+    }
+
+    if (
+      !location.type ||
+      location.type !== "Point" ||
+      !Array.isArray(location.coordinates) ||
+      location.coordinates.length !== 2
+    ) {
+      throw new ApiError(
+        400,
+        "Invalid 'location' format. Must include type: 'Point' and [longitude, latitude] coordinates."
+      );
+    }
+    const existingLocation = await Node.findOne({"location.coordinates": {$eq: location.coordinates}});
+    if (existingLocation) {
+    throw new ApiError(
+      409,
+      `A node already exists at this location (lon: ${location.coordinates[0]}, lat: ${location.coordinates[1]}).`
+    );
+}
+
+    const newNode = await Node.create({
+      type,
+      name,
+      regionId,
+      district,
+      location,
+      capacity_kg: capacity_kg || 0,
+      contact: contact || null,
+    });
+
+    return res
+      .status(201)
+      .json(new ApiResponse(201, newNode, "Node created successfully."));
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    } else {
+      throw new ApiError(
+        500,
+        "Failed to create node.",
+        [error.message],
+        error.stack
+      );
+    }
+  }
+});
+
+const deleteNode = asyncHandler(async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const node = await Node.findById(id);
+    if (!node) {
+      throw new ApiError(404, `Node with ID '${id}' not found.`);
+    }
+
+    await node.deleteOne();
+
+    return res.status(200)
+    .json(new ApiResponse(200, { id }, "Node deleted successfully."));
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    } else {
+      throw new ApiError(
+        500,
+        "Failed to delete node.",
+        [error.message],
+        error.stack
+      );
+    }
+  }
+});
+
+const getNodesByRegion = asyncHandler(async (req, res) => {
+  try {
+    const { regionId } = req.params;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+
+    if (!regionId) {
+      throw new ApiError(400, "Please provide a valid 'regionId'.");
+    }
+
+    const totalNodes = await Node.countDocuments({ regionId });
+
+    if (totalNodes === 0) {
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            {
+              nodes: [],
+              pagination: {
+                totalNodes: 0,
+                totalPages: 0,
+                currentPage: page,
+                limit,
+              },
+            },
+            `No nodes found for region '${regionId}'.`
+          )
+        );
+    }
+
+    const nodes = await Node.find({ regionId })
+      .sort({ name: 1 }) // optional sorting
+      .skip(skip)
+      .limit(limit);
+
+    const totalPages = Math.ceil(totalNodes / limit);
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          regionId,
+          count: nodes.length,
+          totalNodes,
+          pagination: {
+            totalPages,
+            currentPage: page,
+            limit,
+          },
+          nodes,
+        },
+        "Nodes fetched successfully."
+      )
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    else
+      throw new ApiError(
+        500,
+        "Failed to fetch nodes for region.",
+        [error.message],
+        error.stack
+      );
+  }
+});
+
+
+export {createNode,deleteNode,getNodesByRegion};
