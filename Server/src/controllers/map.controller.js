@@ -1,6 +1,7 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
 import {ApiError} from "../utils/ApiError.js"
 import { ApiResponse } from "../utils/ApiResponse.js";
+import {Event} from "../models/event.model.js"
 
 const getAllEvents=asyncHandler(async(req,res)=>{
     const { start, end } = req.query;
@@ -12,12 +13,10 @@ const getAllEvents=asyncHandler(async(req,res)=>{
     const startDate = new Date(start);
     const endDate = new Date(end);
 
-    // Query events within the range
     const events = await Event.find({
         time: { $gte: startDate, $lte: endDate }
     }).sort({ time: 1 });
 
-    // Return wrapped response
     return res
     .status(200)
     .json(new ApiResponse(200,{
