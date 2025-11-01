@@ -42,6 +42,21 @@ services:
     volumes:
       - mock_data_cache:/app/mock-data/crop-generation-data
 
+  ml:
+    build:
+      context: ./ml
+    restart: unless-stopped
+    ports:
+      - '5050:5050'
+    depends_on:
+      mongo:
+        condition: service_healthy
+    env_file:
+      - ./ml/.env.docker
+    volumes:
+      - ./ml/artifacts:/app/artifacts
+      - ./ml/data:/app/data
+
 volumes:
   mongo_data:
   mock_data_cache:

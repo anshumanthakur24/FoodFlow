@@ -5,6 +5,17 @@ This module prepares historical demand features from MongoDB and trains two unsu
 - **KMeans** clusters districts with similar demand and supply behavior.
 - **Isolation Forest** highlights anomalous demand spikes that may indicate brewing crises.
 
+## Running inside Docker Compose
+
+- The repository now ships with an `ml` service in `docker-compose.yml`.
+- Container-specific settings live in `.env.docker` (Mongo points to the `mongo` service, paths stay relative to `/app`).
+- Bring the stack up with:
+  ```bash
+  docker compose up -d --build ml
+  ```
+- Artifacts and CSV data are bind-mounted (`./ml/artifacts`, `./ml/data`) so training output persists on the host.
+- For local development on Windows, keep using `.env`; Docker Compose automatically injects values from `.env.docker` for the container.
+
 ## Prerequisites
 
 1. Install Python 3.10 or newer.
