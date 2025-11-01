@@ -222,4 +222,43 @@ const getAllNodes = asyncHandler(async (req, res) => {
       );
   }
 });
-export { createNode, deleteNode, getNodesByRegion, getAllNodes };
+
+const getAllDistricts = asyncHandler(async (req, res) => {
+  try {
+    const districts = await Node.distinct("district");
+
+    if (!districts || districts.length === 0) {
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            { districts: [] },
+            "No districts found in database."
+          )
+        );
+    }
+
+    districts.sort();
+
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          { count: districts.length, districts },
+          "Unique districts fetched successfully."
+        )
+      );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    else
+      throw new ApiError(
+        500,
+        "Failed to fetch unique districts.",
+        [error.message],
+        error.stack
+      );
+  }
+});
+export { createNode, deleteNode, getNodesByRegion, getAllNodes,getAllDistricts };
