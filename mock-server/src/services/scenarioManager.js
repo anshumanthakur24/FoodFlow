@@ -364,6 +364,17 @@ function buildFarmPayload(
     : 'Mixed Produce';
   const point = toPointCoordinates(region);
   const batchId = `batch-${eventId.slice(0, 24)}`;
+  const coords = extractCoordinates(region);
+  const emittedFrom = {
+    nodeId: regionCode,
+    type: 'farm',
+    name: region.name || region.district || region.state || regionCode,
+    state: region.state || null,
+    district: region.district || null,
+    location: coords && typeof coords.lat === 'number' && typeof coords.lon === 'number'
+      ? { lat: Number(coords.lat.toFixed(6)), lon: Number(coords.lon.toFixed(6)) }
+      : null,
+  };
   const batch = {
     parentBatchId: null,
     foodType: cropName,
@@ -401,13 +412,14 @@ function buildFarmPayload(
 
   return {
     event: {
-      eventId,
       time: eventTimestamp.toISOString(),
       type: 'farm_production',
       location: { type: 'Point', coordinates: point },
       payload: {
+        eventId,
         scenarioId: runtime.scenario._id.toString(),
         tickIndex: runtime.tickIndex,
+        emittedFrom,
         region: {
           id: region._id ? region._id.toString() : null,
           name: region.name || null,
@@ -505,15 +517,15 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
     const point = toPointCoordinates(node);
     const batchId = `batch-${eventId.slice(0, 24)}`;
     const emittedFrom = nodeToEmittedFrom(node);
-    const payload = {
-      eventId,
+    const apiPayload = {
       time: eventTimestamp.toISOString(),
       type: 'farm_production',
       location: { type: 'Point', coordinates: point },
-      emittedFrom,
       payload: {
+        eventId,
         scenarioId: runtime.scenario._id.toString(),
         tickIndex: runtime.tickIndex,
+        emittedFrom,
         node: emittedFrom,
         quantity_kg: quantityKg,
         quantity_tonnes: quantityTonnes,
@@ -561,13 +573,13 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
       record: {
         scenarioId: runtime.scenario._id,
         type: 'farm',
-        payload,
+        payload: apiPayload,
         tickIndex: runtime.tickIndex,
         timestamp: eventTimestamp,
       },
       apiRequest: {
         url: `${MAIN_API_URL}${MAIN_API_ROUTES.farm}`,
-        body: payload,
+        body: apiPayload,
       },
     };
   }

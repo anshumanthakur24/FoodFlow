@@ -281,11 +281,16 @@ const startScenario = asyncHandler(async (req, res) => {
 
     const ngos = await NGO.find();
     if (ngos.length === 0) {
-      console.warn("⚠️ No NGOs found in the database — continuing without NGOs.");
+      console.warn(
+        "⚠️ No NGOs found in the database — continuing without NGOs."
+      );
     }
 
     const formattedNodes = nodes.map((node, index) => ({
-      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(3, "0")}`,
+      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(
+        3,
+        "0"
+      )}`,
       type: node.type,
       district: node.district,
       state: node.regionId || "Unknown",
@@ -310,7 +315,7 @@ const startScenario = asyncHandler(async (req, res) => {
       batchSize: 20,
       intervalMs: 2000,
       nodes: formattedNodes,
-      ngos: formattedNGOs, 
+      ngos: formattedNGOs,
       durationMinutes: 5,
       probabilities: { farm: 0.7, shipment: 0.25, ngo: 0.05 },
     };
@@ -319,7 +324,6 @@ const startScenario = asyncHandler(async (req, res) => {
       headers: { "Content-Type": "application/json" },
       timeout: 10000,
     });
-
 
     return res.status(200).json(
       new ApiResponse(
@@ -358,5 +362,11 @@ const startScenario = asyncHandler(async (req, res) => {
   }
 });
 
-
-export { createNode, deleteNode, getNodesByRegion, getAllNodes,getAllDistricts,startScenario };
+export {
+  createNode,
+  deleteNode,
+  getNodesByRegion,
+  getAllNodes,
+  getAllDistricts,
+  startScenario,
+};
