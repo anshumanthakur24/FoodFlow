@@ -38,6 +38,8 @@ const MONGO_COLLECTION = process.env.MONGO_COLLECTION || 'crops_history';
 
 const MIN_PER_DISTRICT = 6; // guarantees >=3 farms and >=3 warehouses
 const MAX_PER_DISTRICT = 10;
+const MIN_NGO_PER_DISTRICT = 0;
+const MAX_NGO_PER_DISTRICT = 2;
 
 function log(step, message) {
   const stamp = new Date().toISOString();
@@ -190,17 +192,25 @@ function buildNode(point, state, district, type, index) {
     .digest('hex')
     .slice(0, 10)
     .toUpperCase();
-  const nodeId = `${type === 'warehouse' ? 'WH' : 'FARM'}-${slugify(
-    district
-  ).toUpperCase()}-${short}`;
-  const name = `${type === 'warehouse' ? 'Warehouse' : 'Farm'} ${district} ${
-    index + 1
-  }`;
+
+  let prefix, name, capacity;
+  if (type === 'warehouse') {
+    prefix = 'WH';
+    name = `Warehouse ${district} ${index + 1}`;
+    capacity = Math.round(10000 + 40000 * Math.random());
+  } else if (type === 'ngo') {
+    prefix = 'NGO';
+    name = `NGO ${district} ${index + 1}`;
+    capacity = Math.round(500 + 2000 * Math.random());
+  } else {
+    prefix = 'FARM';
+    name = `Farm ${district} ${index + 1}`;
+    capacity = Math.round(1000 + 4000 * Math.random());
+  }
+
+  const nodeId = `${prefix}-${slugify(district).toUpperCase()}-${short}`;
   const regionId = `${slugify(state)}:${slugify(district)}`;
-  const capacity =
-    type === 'warehouse'
-      ? Math.round(10000 + 40000 * Math.random())
-      : Math.round(1000 + 4000 * Math.random());
+
   return {
     nodeId,
     type,
@@ -272,26 +282,44 @@ async function generate() {
       MIN_PER_DISTRICT +
       Math.floor(rng() * (MAX_PER_DISTRICT - MIN_PER_DISTRICT + 1));
 
+    // Determine farm and warehouse counts (preserving original logic)
     const farmCount = Math.max(3, Math.floor(total / 2));
     const warehouseCount = Math.max(3, total - farmCount);
+
+    // Determine NGO count (0-2 per district)
+    const ngoCount =
+      MIN_NGO_PER_DISTRICT +
+      Math.floor(rng() * (MAX_NGO_PER_DISTRICT - MIN_NGO_PER_DISTRICT + 1));
+
+    // Build type array
     const types = [];
     for (let i = 0; i < farmCount; i += 1) types.push('farm');
     for (let i = 0; i < warehouseCount; i += 1) types.push('warehouse');
+    for (let i = 0; i < ngoCount; i += 1) types.push('ngo');
+
+    // Fill any remaining slots with farm/warehouse
     while (types.length < total) types.push(rng() < 0.5 ? 'farm' : 'warehouse');
+
+    // Shuffle types
     for (let i = types.length - 1; i > 0; i -= 1) {
       const swap = Math.floor(rng() * (i + 1));
       [types[i], types[swap]] = [types[swap], types[i]];
     }
 
-    const points = Array.from({ length: total }, () => samplePoint(bbox, rng));
+    const totalNodes = types.length;
+    const points = Array.from({ length: totalNodes }, () =>
+      samplePoint(bbox, rng)
+    );
     points.forEach((point, idx) => {
       nodes.push(buildNode(point, state, district, types[idx], idx));
     });
     log(
       'NODES',
-      `Created ${total} nodes (${
+      `Created ${totalNodes} nodes (${
         types.filter((t) => t === 'farm').length
-      } farms, ${types.filter((t) => t === 'warehouse').length} warehouses)`
+      } farms, ${types.filter((t) => t === 'warehouse').length} warehouses, ${
+        types.filter((t) => t === 'ngo').length
+      } NGOs)`
     );
   }
 

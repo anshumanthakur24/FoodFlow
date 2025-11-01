@@ -37,14 +37,17 @@ function normalizeInterval(value) {
 }
 
 function normalizeProbabilities(input) {
-  const source = { ...DEFAULT_PROBABILITIES, ...(input || {}) };
-  const sum = source.farm + source.shipment + source.ngo;
-  if (!sum || sum <= 0) return { ...DEFAULT_PROBABILITIES };
-  return {
-    farm: source.farm / sum,
-    shipment: source.shipment / sum,
-    ngo: source.ngo / sum,
-  };
+  const merged = { ...DEFAULT_PROBABILITIES, ...(input || {}) };
+  const entries = Object.entries(merged).map(([key, value]) => [
+    key,
+    Number(value) || 0,
+  ]);
+  const total = entries.reduce((acc, [, value]) => acc + value, 0);
+  if (!total || total <= 0) return { ...DEFAULT_PROBABILITIES };
+  return entries.reduce((acc, [key, value]) => {
+    acc[key] = value / total;
+    return acc;
+  }, {});
 }
 
 function createAdhocRegions(filterList) {
@@ -371,93 +374,42 @@ function buildFarmPayload(
   };
 }
 
-function buildShipmentPayload(
-  runtime,
-  batch,
-  warehouse,
-  distanceKm,
-  quantity,
-  eventTimestamp,
-  eta,
-  eventId
-) {
-  const regionCode = batch.region.code || batch.region.name || batch.eventId;
-  const fromNodeId = pseudoObjectId(`farm-node:${regionCode}`);
-  const warehouseCode = warehouse
-    ? warehouse.code || warehouse.name || 'warehouse'
-    : 'warehouse';
-  const toNodeId = pseudoObjectId(`warehouse-node:${warehouseCode}`);
-  const travelHours = Number(batch.travelHours.toFixed(2));
-  const point = warehouse
-    ? toPointCoordinates(warehouse)
-    : toPointCoordinates(batch.region);
-  return {
-    shipmentId: eventId,
-    batchIds: [],
-    fromNode: fromNodeId,
-    toNode: toNodeId,
-    start_iso: eventTimestamp.toISOString(),
-    eta_iso: eta.toISOString(),
-    arrived_iso: null,
-    status: 'in_transit',
-    vehicleId: `vehicle-${eventId.slice(0, 6)}`,
-    travel_time_minutes: Math.max(30, Math.round(travelHours * 60)),
-    breaks: [],
-    createdBy: null,
-    latest_location: {
-      coordinates: point,
-      timestamp: eventTimestamp.toISOString(),
-    },
-    metadata: {
-      scenarioId: runtime.scenario._id.toString(),
-      tickIndex: runtime.tickIndex,
-      quantity_kg: Number((quantity * 1000).toFixed(2)),
-      distance_km: distanceKm !== null ? Number(distanceKm.toFixed(2)) : null,
-      sourceFarmEventId: batch.eventId,
-    },
-  };
+function createRequestItems(rng) {
+  const catalog = [
+    { foodType: 'cereals', min: 350, max: 1200 },
+    { foodType: 'pulses', min: 200, max: 800 },
+    { foodType: 'oil', min: 150, max: 600 },
+    { foodType: 'vegetables', min: 250, max: 900 },
+    { foodType: 'fertilizer', min: 300, max: 900 },
+    { foodType: 'seeds', min: 100, max: 400 },
+    { foodType: 'logistics', min: 1, max: 3 },
+  ];
+  const desired = Math.max(1, Math.floor(rng() * 3) + 1);
+  const items = [];
+  const used = new Set();
+  while (items.length < desired && used.size < catalog.length) {
+    const index = Math.floor(rng() * catalog.length);
+    if (used.has(index)) continue;
+    used.add(index);
+    const entry = catalog[index];
+    const required = entry.min + rng() * (entry.max - entry.min);
+    const rounded =
+      entry.foodType === 'logistics'
+        ? Number(required.toFixed(0))
+        : Number(required.toFixed(2));
+    items.push({ foodType: entry.foodType, required_kg: rounded });
+  }
+  return items;
 }
 
-function buildNgoPayload(
-  runtime,
-  region,
-  severity,
-  needs,
-  eventTimestamp,
-  deadline,
-  eventId
-) {
-  const regionCode = region.code || region.name || eventId;
-  const requesterNode = pseudoObjectId(`ngo-node:${regionCode}`);
-  return {
-    requesterNode,
-    items: needs.map((item) => ({
-      foodType: item.item,
-      required_kg: item.requiredKg,
-    })),
-    requiredBy_iso: deadline.toISOString(),
-    status: 'open',
-    fulfilledBy: null,
-    history: [
-      {
-        time: eventTimestamp.toISOString(),
-        action: 'created',
-        note: `Scenario ${runtime.scenario.name} severity ${severity}`,
-      },
-    ],
-    metadata: {
-      scenarioId: runtime.scenario._id.toString(),
-      tickIndex: runtime.tickIndex,
-      region: {
-        id: region._id ? region._id.toString() : null,
-        name: region.name || null,
-        state: region.state || null,
-        district: region.district || null,
-        code: region.code || null,
-      },
-      severity,
-    },
-  };
+function chooseFulfillmentCandidate(runtime, rng) {
+  const candidates = [];
+  if (runtime.warehouseNodes.length) candidates.push(...runtime.warehouseNodes);
+  if (runtime.warehouses.length) candidates.push(...runtime.warehouses);
+  if (runtime.farmNodes.length) candidates.push(...runtime.farmNodes);
+  if (!candidates.length) return null;
+  const index = Math.floor(rng() * candidates.length);
+  return candidates[index];
 }
 
 async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
@@ -589,234 +541,239 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
   };
 }
 
-async function createShipmentEvent(runtime, rng, eventKey, eventTimestamp) {
-  if (runtime.nodeMode) {
-    const batch = runtime.farmInventory.find((b) => b.availableTonnes > 0);
-    if (!batch) return null;
-    if (!runtime.warehouseNodes.length) return null;
-    const sourceCoords = extractCoordinates(batch.node);
-    let selected = runtime.warehouseNodes[0];
-    let minDistance = Number.POSITIVE_INFINITY;
-    for (const wh of runtime.warehouseNodes) {
-      const coords = extractCoordinates(wh);
-      if (!coords || !sourceCoords) continue;
-      const d = haversineDistanceKm(sourceCoords, coords);
-      if (d !== null && d < minDistance) {
-        minDistance = d;
-        selected = wh;
-      }
-    }
-    const fraction = 0.25 + rng() * 0.5;
-    const maxQuantity = Math.max(1, batch.availableTonnes * fraction);
-    const quantity = Math.min(batch.availableTonnes, maxQuantity);
-    batch.availableTonnes = Number(
-      Math.max(0, batch.availableTonnes - quantity).toFixed(2)
-    );
-    const eventId = createEventId(eventKey);
-    const startPoint = extractCoordinates(batch.node);
-    const endPoint = extractCoordinates(selected);
-    const distanceKm =
-      startPoint && endPoint ? haversineDistanceKm(startPoint, endPoint) : null;
-    const speedKmph = 40 + rng() * 30;
-    const travelHours = (distanceKm || 50) / speedKmph;
-    const eta = new Date(eventTimestamp.getTime() + travelHours * 3600000);
-    const payload = {
-      shipmentId: eventId,
-      batchIds: [batch.batchId],
-      fromNode: batch.node.nodeId || null,
-      toNode: selected.nodeId || null,
-      start_iso: eventTimestamp.toISOString(),
-      eta_iso: eta.toISOString(),
-      arrived_iso: null,
-      status: 'in_transit',
-      vehicleId: `vehicle-${eventId.slice(0, 6)}`,
-      travel_time_minutes: Math.max(30, Math.round(travelHours * 60)),
-      latest_location: {
-        coordinates: endPoint
-          ? [Number(endPoint.lon.toFixed(6)), Number(endPoint.lat.toFixed(6))]
-          : toPointCoordinates(batch.node),
-        timestamp: eventTimestamp.toISOString(),
-      },
-      emittedFrom: nodeToEmittedFrom(batch.node),
-      metadata: {
-        scenarioId: runtime.scenario._id.toString(),
-        tickIndex: runtime.tickIndex,
-        quantity_kg: Number((quantity * 1000).toFixed(2)),
-        distance_km: distanceKm !== null ? Number(distanceKm.toFixed(2)) : null,
-        sourceFarmEventId: batch.eventId,
-      },
-    };
-    return {
-      type: 'shipment',
-      timestamp: eventTimestamp,
-      record: {
-        scenarioId: runtime.scenario._id,
-        type: 'shipment',
-        payload,
-        tickIndex: runtime.tickIndex,
-        timestamp: eventTimestamp,
-      },
-      apiRequest: {
-        url: `${MAIN_API_URL}${MAIN_API_ROUTES.shipment}`,
-        body: payload,
-      },
-    };
-  }
-  const batch = resolveRegionForShipment(runtime, rng);
-  if (!batch) return null;
-  const fraction = 0.25 + rng() * 0.5;
-  const maxQuantity = Math.max(1, batch.availableTonnes * fraction);
-  const quantity = Math.min(batch.availableTonnes, maxQuantity);
-  batch.availableTonnes = Number(
-    Math.max(0, batch.availableTonnes - quantity).toFixed(2)
-  );
-  const { warehouse, distanceKm } = resolveWarehouse(runtime, batch, rng);
-  const distanceValue = distanceKm !== null ? distanceKm : 50 + rng() * 300;
-  const speedKmph = 40 + rng() * 30;
-  const travelHours = distanceValue / speedKmph;
-  batch.speedKmph = Number(speedKmph.toFixed(2));
-  batch.travelHours = Number(travelHours.toFixed(2));
-  const eta = new Date(eventTimestamp.getTime() + travelHours * 3600000);
-  const eventId = createEventId(eventKey);
-  const payload = buildShipmentPayload(
-    runtime,
-    batch,
-    warehouse,
-    distanceValue,
-    quantity,
-    eventTimestamp,
-    eta,
-    eventId
-  );
+function regionToRequesterDetails(region) {
+  const point = toPointCoordinates(region);
+  const [lon, lat] = Array.isArray(point) ? point : [null, null];
   return {
-    type: 'shipment',
-    timestamp: eventTimestamp,
+    nodeId: null,
+    type: 'region',
+    name: region.name || region.district || region.state || 'Region',
+    state: region.state || null,
+    district: region.district || null,
+    location:
+      lat !== null && lon !== null
+        ? { lat: Number(lat), lon: Number(lon) }
+        : null,
+  };
+}
+
+function createRequestAcceptanceEvent(runtime, ledgerEntry) {
+  if (!ledgerEntry) return null;
+  const acceptanceTimestamp = ledgerEntry.acceptAt || new Date();
+  const daysOpen = Math.max(
+    0,
+    Math.round(
+      (acceptanceTimestamp.getTime() - ledgerEntry.createdOn.getTime()) /
+        86400000
+    )
+  );
+  const history = [
+    ...ledgerEntry.history,
+    {
+      time: acceptanceTimestamp.toISOString(),
+      action: 'approved',
+      note: `Request approved after ${daysOpen} day(s)`,
+    },
+  ];
+  ledgerEntry.history = history;
+  ledgerEntry.status = 'approved';
+  ledgerEntry.acceptedAt = acceptanceTimestamp;
+  runtime.requestLedger.set(ledgerEntry.requestId, ledgerEntry);
+
+  const payload = {
+    requestId: ledgerEntry.requestId,
+    status: 'approved',
+    approvedOn: acceptanceTimestamp.toISOString(),
+    fulfilledBy: ledgerEntry.fulfilledBy || null,
+    history,
+    metadata: {
+      scenarioId: runtime.scenario._id.toString(),
+      tickIndex: runtime.tickIndex,
+      requester: ledgerEntry.requesterDetails,
+      fulfilledBy: ledgerEntry.fulfilledByDetails || null,
+      daysOpen,
+    },
+  };
+
+  if (ledgerEntry.requiredBefore) {
+    payload.requiredBefore = ledgerEntry.requiredBefore.toISOString();
+  }
+
+  return {
+    type: 'requestAccepted',
+    timestamp: acceptanceTimestamp,
     record: {
       scenarioId: runtime.scenario._id,
-      type: 'shipment',
+      type: 'requestAccepted',
       payload,
       tickIndex: runtime.tickIndex,
-      timestamp: eventTimestamp,
+      timestamp: acceptanceTimestamp,
     },
     apiRequest: {
-      url: `${MAIN_API_URL}${MAIN_API_ROUTES.shipment}`,
+      url: `${MAIN_API_URL}${MAIN_API_ROUTES.requestAccept}`,
       body: payload,
     },
   };
 }
 
-async function createNgoEvent(runtime, rng, eventKey, eventTimestamp) {
+function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
+  const requestKey = createEventId(`${eventKey}:request`);
+  const requestId = `REQ-${requestKey.slice(0, 12).toUpperCase()}`;
+  const items = createRequestItems(rng);
+
+  let requesterNodeId;
+  let requesterDetails;
+
   if (runtime.nodeMode) {
     if (!runtime.ngoNodes.length) return null;
     const node = runtime.ngoNodes[Math.floor(rng() * runtime.ngoNodes.length)];
-    const severity = Math.min(5, Math.max(1, Math.floor(rng() * 5) + 1));
-    const needsPool = ['cereals', 'pulses', 'fertilizer', 'seeds', 'logistics'];
-    const needsCount = Math.max(1, Math.floor(rng() * needsPool.length));
-    const needs = Array.from({ length: needsCount }, (_, idx) => {
-      const choice =
-        needsPool[
-          (idx + Math.floor(rng() * needsPool.length)) % needsPool.length
-        ];
-      const quantityTonnes = Number((5 + rng() * 20).toFixed(2));
-      return {
-        item: choice,
-        quantityTonnes,
-        requiredKg: Number((quantityTonnes * 1000).toFixed(2)),
-      };
-    });
-    const deadline = new Date(
-      eventTimestamp.getTime() + (2 + rng() * 5) * 86400000
+    requesterDetails = nodeToEmittedFrom(node);
+    const candidate =
+      (node.mongoId && node.mongoId.toString()) ||
+      (node._id && node._id.toString && node._id.toString()) ||
+      node.nodeId ||
+      requesterDetails.nodeId ||
+      requestId;
+    const candidateStr = String(candidate);
+    const looksLikeObjectId = /^[a-f0-9]{24}$/i.test(candidateStr);
+    requesterNodeId = looksLikeObjectId
+      ? candidateStr
+      : pseudoObjectId(`node:${candidateStr}`);
+  } else {
+    if (!runtime.regions.length) return null;
+    const region = runtime.regions[Math.floor(rng() * runtime.regions.length)];
+    requesterDetails = regionToRequesterDetails(region);
+    requesterNodeId = pseudoObjectId(
+      `region:${region.code || region.district || region.name || requestId}`
     );
-    const eventId = createEventId(eventKey);
-    const emittedFrom = nodeToEmittedFrom(node);
-    const payload = {
-      requesterNode: node.nodeId || null,
-      items: needs.map((n) => ({
-        foodType: n.item,
-        required_kg: n.requiredKg,
-      })),
-      requiredBy_iso: deadline.toISOString(),
-      status: 'open',
-      emittedFrom,
-      history: [
-        {
-          time: eventTimestamp.toISOString(),
-          action: 'created',
-          note: `Scenario ${runtime.scenario.name} severity ${severity}`,
-        },
-      ],
-      metadata: {
-        scenarioId: runtime.scenario._id.toString(),
-        tickIndex: runtime.tickIndex,
-        severity,
-      },
-    };
-    return {
-      type: 'ngo',
-      timestamp: eventTimestamp,
-      record: {
-        scenarioId: runtime.scenario._id,
-        type: 'ngo',
-        payload,
-        tickIndex: runtime.tickIndex,
-        timestamp: eventTimestamp,
-      },
-      apiRequest: {
-        url: `${MAIN_API_URL}${MAIN_API_ROUTES.ngo}`,
-        body: payload,
-      },
-    };
   }
-  if (!runtime.regions.length) return null;
-  const targetIndex = Math.floor(rng() * runtime.regions.length);
-  const region = runtime.regions[targetIndex];
-  const severity = Math.min(5, Math.max(1, Math.floor(rng() * 5) + 1));
-  const needsPool = ['cereals', 'pulses', 'fertilizer', 'seeds', 'logistics'];
-  const needsCount = Math.max(1, Math.floor(rng() * needsPool.length));
-  const needs = Array.from({ length: needsCount }, (_, idx) => {
-    const choice =
-      needsPool[
-        (idx + Math.floor(rng() * needsPool.length)) % needsPool.length
-      ];
-    const quantityTonnes = Number((10 + rng() * 90).toFixed(2));
-    return {
-      item: choice,
-      quantityTonnes,
-      requiredKg: Number((quantityTonnes * 1000).toFixed(2)),
-    };
-  });
-  const deadline = new Date(
-    eventTimestamp.getTime() + (2 + rng() * 5) * 86400000
+
+  const createdOn = eventTimestamp;
+  const requiredBefore = new Date(
+    eventTimestamp.getTime() + (2 + Math.floor(rng() * 5)) * 86400000
   );
-  const eventId = createEventId(eventKey);
-  const payload = buildNgoPayload(
-    runtime,
-    region,
-    severity,
-    needs,
-    eventTimestamp,
-    deadline,
-    eventId
-  );
+  const history = [
+    {
+      time: createdOn.toISOString(),
+      action: 'created',
+      note: `Scenario ${runtime.scenario.name} request created`,
+    },
+  ];
+
+  const payload = {
+    requestId,
+    requesterNode: requesterNodeId,
+    items,
+    createdOn: createdOn.toISOString(),
+    requiredBefore: requiredBefore.toISOString(),
+    status: 'pending',
+    fulfilledBy: null,
+    history,
+    metadata: {
+      scenarioId: runtime.scenario._id.toString(),
+      tickIndex: runtime.tickIndex,
+      requester: requesterDetails,
+    },
+  };
+
+  const ledgerEntry = {
+    requestId,
+    requesterNode: requesterNodeId,
+    requesterDetails,
+    createdOn,
+    requiredBefore,
+    items,
+    history: [...history],
+    status: 'pending',
+  };
+
+  const acceptanceChance = 0.65;
+  if (rng() < acceptanceChance) {
+    const minDays = 1;
+    const maxDays = 6;
+    const dayOffset = minDays + Math.floor(rng() * (maxDays - minDays + 1));
+    const acceptAt = new Date(eventTimestamp.getTime() + dayOffset * 86400000);
+    ledgerEntry.acceptAt = acceptAt;
+    const fulfillCandidate = chooseFulfillmentCandidate(runtime, rng);
+    if (fulfillCandidate) {
+      if (fulfillCandidate.nodeId) {
+        ledgerEntry.fulfilledBy = pseudoObjectId(
+          `node:${fulfillCandidate.nodeId}`
+        );
+        ledgerEntry.fulfilledByDetails = nodeToEmittedFrom(fulfillCandidate);
+      } else {
+        const coords = extractCoordinates(fulfillCandidate);
+        const hasCoords =
+          coords &&
+          typeof coords.lat === 'number' &&
+          typeof coords.lon === 'number';
+        ledgerEntry.fulfilledBy = pseudoObjectId(
+          `warehouse:${
+            fulfillCandidate.code || fulfillCandidate.name || requestId
+          }`
+        );
+        ledgerEntry.fulfilledByDetails = {
+          nodeId: fulfillCandidate.code || fulfillCandidate.name || null,
+          type: fulfillCandidate.type || 'warehouse',
+          name: fulfillCandidate.name || null,
+          state: fulfillCandidate.state || null,
+          district: fulfillCandidate.district || null,
+          location: hasCoords
+            ? {
+                lat: Number(coords.lat.toFixed(6)),
+                lon: Number(coords.lon.toFixed(6)),
+              }
+            : null,
+        };
+      }
+    }
+    runtime.pendingRequests.push(ledgerEntry);
+  } else {
+    runtime.openRequests.set(requestId, ledgerEntry);
+  }
+  runtime.requestLedger.set(requestId, ledgerEntry);
+
   return {
-    type: 'ngo',
+    type: 'request',
     timestamp: eventTimestamp,
     record: {
       scenarioId: runtime.scenario._id,
-      type: 'ngo',
+      type: 'request',
       payload,
       tickIndex: runtime.tickIndex,
       timestamp: eventTimestamp,
     },
     apiRequest: {
-      url: `${MAIN_API_URL}${MAIN_API_ROUTES.ngo}`,
+      url: `${MAIN_API_URL}${MAIN_API_ROUTES.request}`,
       body: payload,
     },
   };
+}
+
+function collectRequestAcceptanceEvents(runtime, tickTimestamp) {
+  if (!runtime.pendingRequests.length) return [];
+  const ready = [];
+  const waiting = [];
+  for (const entry of runtime.pendingRequests) {
+    if (entry.acceptAt && entry.acceptAt <= tickTimestamp) {
+      const event = createRequestAcceptanceEvent(runtime, entry);
+      if (event) ready.push(event);
+      runtime.openRequests.delete(entry.requestId);
+    } else {
+      waiting.push(entry);
+    }
+  }
+  runtime.pendingRequests = waiting;
+  return ready;
 }
 
 async function generateEvents(runtime, tickTimestamp) {
   const events = [];
+  const acceptanceEvents = collectRequestAcceptanceEvents(
+    runtime,
+    tickTimestamp
+  );
+  if (acceptanceEvents.length) events.push(...acceptanceEvents);
   const baseKey = `${runtime.scenario.seed}:${runtime.scenario._id}:${runtime.tickIndex}`;
   for (let i = 0; i < runtime.batchSize; i += 1) {
     const eventKey = `${baseKey}:${i}`;
@@ -824,29 +781,23 @@ async function generateEvents(runtime, tickTimestamp) {
     const eventTimestamp = deriveEventTimestamp(runtime, tickTimestamp, i);
     const roll = rng();
     let event;
-    if (roll < runtime.probabilities.farm) {
+    const farmThreshold = runtime.probabilities.farm || 0;
+    const requestThreshold =
+      farmThreshold + (runtime.probabilities.request || 0);
+    if (roll < farmThreshold) {
       event = await createFarmEvent(runtime, rng, eventKey, eventTimestamp);
-    } else if (
-      roll <
-      runtime.probabilities.farm + runtime.probabilities.shipment
-    ) {
-      event = await createShipmentEvent(runtime, rng, eventKey, eventTimestamp);
-      if (!event)
-        event = await createFarmEvent(
-          runtime,
-          rng,
-          `${eventKey}:fallback`,
-          eventTimestamp
-        );
     } else {
-      event = await createNgoEvent(runtime, rng, eventKey, eventTimestamp);
-      if (!event)
+      if (roll < requestThreshold) {
+        event = createRequestEvent(runtime, rng, eventKey, eventTimestamp);
+      }
+      if (!event) {
         event = await createFarmEvent(
           runtime,
           rng,
           `${eventKey}:fallback`,
           eventTimestamp
         );
+      }
     }
     if (event) events.push(event);
   }
@@ -955,6 +906,9 @@ function createRuntime(scenario, options) {
     farmNodes: [],
     ngoNodes: [],
     farmInventory: [],
+    pendingRequests: [],
+    requestLedger: new Map(),
+    openRequests: new Map(),
     cropCache: new Map(),
     sentEvents: 0,
     stop: async (updateStatus) => {
@@ -963,6 +917,10 @@ function createRuntime(scenario, options) {
         runtime.timer = null;
       }
       runtime.active = false;
+      runtime.pendingRequests = [];
+      runtime.requestLedger.clear();
+      runtime.openRequests.clear();
+      runtime.farmInventory = [];
       activeScenarios.delete(runtime.scenario._id.toString());
       if (updateStatus) {
         await Scenario.updateOne(
@@ -992,6 +950,10 @@ function createRuntime(scenario, options) {
     runtime.startedAt = Date.now();
     runtime.tickIndex = 0;
     runtime.active = true;
+    runtime.pendingRequests = [];
+    runtime.requestLedger.clear();
+    runtime.openRequests.clear();
+    runtime.farmInventory = [];
     scheduleNext(runtime);
   };
 
