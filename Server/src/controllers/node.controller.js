@@ -161,5 +161,68 @@ const getNodesByRegion = asyncHandler(async (req, res) => {
   }
 });
 
+const getAllNodes = asyncHandler(async (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
+    const skip = (page - 1) * limit;
+
+    const totalNodes = await Node.countDocuments();
+
+    if (totalNodes === 0) {
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            {
+              nodes: [],
+              pagination: {
+                totalNodes: 0,
+                totalPages: 0,
+                currentPage: page,
+                limit,
+              },
+            },
+            "No nodes found in database."
+          )
+        );
+    }
+
+    
+    const nodes = await Node.find()
+      .sort({ name: 1 }) 
+      .skip(skip)
+      .limit(limit);
+
+    const totalPages = Math.ceil(totalNodes / limit);
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          count: nodes.length,
+          totalNodes,
+          pagination: {
+            totalPages,
+            currentPage: page,
+            limit,
+          },
+          nodes,
+        },
+        "All nodes fetched successfully."
+      )
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    else
+      throw new ApiError(
+        500,
+        "Failed to fetch nodes.",
+        [error.message],
+        error.stack
+      );
+  }
+});
 
 export {createNode,deleteNode,getNodesByRegion};
