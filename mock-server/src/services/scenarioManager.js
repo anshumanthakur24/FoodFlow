@@ -286,9 +286,9 @@ function buildFarmPayload(
     manufacture_date: eventTimestamp.toISOString(),
     expiry_iso: cropEntry
       ? new Date(
-        eventTimestamp.getTime() +
-        (cropEntry.season_growth_months || 6) * 30 * 24 * 3600000
-      ).toISOString()
+          eventTimestamp.getTime() +
+            (cropEntry.season_growth_months || 6) * 30 * 24 * 3600000
+        ).toISOString()
       : null,
     initial_temp_c: 18 + Math.random() * 6,
     freshnessPct: 100,
@@ -771,7 +771,7 @@ async function createNgoEvent(runtime, rng, eventKey, eventTimestamp) {
   const needs = Array.from({ length: needsCount }, (_, idx) => {
     const choice =
       needsPool[
-      (idx + Math.floor(rng() * needsPool.length)) % needsPool.length
+        (idx + Math.floor(rng() * needsPool.length)) % needsPool.length
       ];
     const quantityTonnes = Number((10 + rng() * 90).toFixed(2));
     return {
@@ -852,21 +852,18 @@ async function postJson(url, body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAIN_API_TIMEOUT_MS);
   try {
-    
     const response = await fetchApi(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-   
-    
     if (!response.ok) {
       const text = await response.text().catch(() => '');
       console.error('Main API error', response.status, text);
     }
   } catch (err) {
-    console.error('Main API error', err.message,url);
+    console.error('Main API error', err.message);
   } finally {
     clearTimeout(timeout);
   }
@@ -906,7 +903,7 @@ function scheduleNext(runtime) {
       }
       const tickTimestamp = new Date(
         runtime.scenario.startDate.getTime() +
-        runtime.tickIndex * runtime.intervalMs
+          runtime.tickIndex * runtime.intervalMs
       );
       const events = await generateEvents(runtime, tickTimestamp);
       if (events.length) {

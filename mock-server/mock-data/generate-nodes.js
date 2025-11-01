@@ -1,89 +1,51 @@
 #!/usr/bin/env node
 /*
-  Generate Node documents for MongoDB.
+  Quick node generator for mock data.
 
-  - Reads a CSV of (state,district) pairs (defaults to ../../ml/data/census2011.csv)
-  - For each district, fetches a bounding box via OSM Nominatim (free), caches results locally
-  - Samples 6-10 random points per district (ensures >=3 farms and >=3 warehouses)
-  - Writes a JSON array suitable for mongoimport or insertMany
+  - Reads distinct (state, district) pairs from MongoDB collection `crops_history` in the
+    `agriculture` database.
+  - For each district fetches a bounding box using the Photon (Komoot) geocoder (cached locally),
+    falls back to a deterministic India-wide bounding box if geocoding fails.
+  - Emits 6-10 random nodes per district with at least 3 farms and 3 warehouses.
+  - Writes a JSON array that can be loaded with mongoimport.
 
-  Usage examples (PowerShell):
+  Usage:
+    node generate-nodes.js [optional-output-file]
 
-  # From CSV (filter by states)
-  node generate-nodes.js --states Maharashtra,Gujarat --output nodes.maha-guj.json
-  # From CSV (offline bbox fallback)
-  node generate-nodes.js --input ..\\..\\ml\\data\\census2011.csv --offline --output nodes.offline.json
-  # From Mongo (agriculte.crops_history, using distinct state/district)
-  node generate-nodes.js --from-mongo --mongo-uri "mongodb://127.0.0.1:27017/agriculte" --mongo-coll crops_history --output nodes.mongo.json
+  Environment overrides (optional):
+    MONGO_URI        default mongodb://127.0.0.1:27017/agriculture
+    MONGO_DB         default agriculture
+    MONGO_COLLECTION default crops_history
 
-  Notes:
-  - Respect Nominatim usage policy. This script throttles requests (1 req/sec) and caches to geocode-cache.json.
-  - If geocoding fails or --offline is set, falls back to India-wide bbox sampling with deterministic seeding.
+  Example import:
+    mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file nodes.generated.json
 */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { MongoClient } = require('mongodb');
 
-const DEFAULT_INPUT = path.resolve(
-  __dirname,
-  '..',
-  '..',
-  'ml',
-  'data',
-  'census2011.csv'
-);
-const DEFAULT_OUTPUT = path.resolve(__dirname, 'nodes.generated.json');
-const CACHE_FILE = path.resolve(__dirname, 'geocode-cache.json');
+const OUTPUT_FILE = process.argv[2]
+  ? path.resolve(process.cwd(), process.argv[2])
+  : path.join(__dirname, 'nodes.generated.json');
+const CACHE_FILE = path.join(__dirname, 'geocode-cache.json');
 
-function parseArgs() {
-  const args = process.argv.slice(2);
-  const out = {
-    input: DEFAULT_INPUT,
-    output: DEFAULT_OUTPUT,
-    states: null,
-    min: 6,
-    max: 10,
-    offline: false,
-    fromMongo: false,
-    mongoUri: null,
-    mongoDb: null,
-    mongoColl: 'crops_history',
-    stateField: 'state',
-    districtField: 'district',
-  };
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--input' && args[i + 1])
-      out.input = path.resolve(process.cwd(), args[++i]);
-    else if (a === '--output' && args[i + 1])
-      out.output = path.resolve(process.cwd(), args[++i]);
-    else if (a === '--states' && args[i + 1])
-      out.states = args[++i]
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-    else if (a === '--min' && args[i + 1])
-      out.min = Math.max(6, Number(args[++i]) || 6);
-    else if (a === '--max' && args[i + 1])
-      out.max = Math.max(out.min, Number(args[++i]) || out.min);
-    else if (a === '--offline') out.offline = true;
-    else if (a === '--from-mongo') out.fromMongo = true;
-    else if (a === '--mongo-uri' && args[i + 1]) out.mongoUri = args[++i];
-    else if (a === '--mongo-db' && args[i + 1]) out.mongoDb = args[++i];
-    else if (a === '--mongo-coll' && args[i + 1]) out.mongoColl = args[++i];
-    else if (a === '--state-field' && args[i + 1]) out.stateField = args[++i];
-    else if (a === '--district-field' && args[i + 1])
-      out.districtField = args[++i];
-  }
-  // ensure min/max support at least 3 per type
-  if (out.min < 6) out.min = 6;
-  if (out.max < out.min) out.max = out.min;
-  return out;
+const MONGO_URI =
+  process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/agriculture';
+const MONGO_DB = process.env.MONGO_DB || 'agriculture';
+const MONGO_COLLECTION = process.env.MONGO_COLLECTION || 'crops_history';
+
+const MIN_PER_DISTRICT = 6; // guarantees >=3 farms and >=3 warehouses
+const MAX_PER_DISTRICT = 10;
+
+function log(step, message) {
+  const stamp = new Date().toISOString();
+  console.log(`[${stamp}] [${step}] ${message}`);
 }
 
-function slugify(s) {
-  return String(s || '')
+function slugify(value) {
+  return String(value || '')
     .toLowerCase()
     .normalize('NFKD')
     .replace(/\p{Diacritic}/gu, '')
@@ -92,118 +54,23 @@ function slugify(s) {
 }
 
 function seededRng(seed) {
-  const h = crypto.createHash('sha1').update(String(seed)).digest();
-  let i = 0;
+  const hash = crypto.createHash('sha1').update(String(seed)).digest();
+  let index = 0;
   return () => {
-    // xorshift-like from hash bytes
-    const v =
-      (h[i % h.length] ^ h[(i + 7) % h.length] ^ h[(i + 13) % h.length]) / 255;
-    i += 1;
-    return v;
+    const value =
+      (hash[index % hash.length] ^
+        hash[(index + 7) % hash.length] ^
+        hash[(index + 13) % hash.length]) /
+      255;
+    index += 1;
+    return value;
   };
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function readCsvPairs(filePath) {
-  const csv = fs.readFileSync(filePath, 'utf8');
-  const lines = csv.split(/\r?\n/).filter(Boolean);
-  if (!lines.length) return [];
-  const header = lines[0].split(',').map((h) => h.trim().toLowerCase());
-  const idxState = header.indexOf('state');
-  const idxDistrict = header.indexOf('district');
-  if (idxState < 0 || idxDistrict < 0) {
-    throw new Error(
-      `CSV must have state,district columns. Headers found: ${header.join(',')}`
-    );
-  }
-  const rows = [];
-  const seen = new Set();
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(',');
-    if (cols.length < Math.max(idxState, idxDistrict) + 1) continue;
-    const state = cols[idxState].replace(/^\"|\"$/g, '').trim();
-    const district = cols[idxDistrict].replace(/^\"|\"$/g, '').trim();
-    if (!state || !district) continue;
-    const key = `${state}::${district}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    rows.push({ state, district });
-  }
-  return rows;
-}
-
-async function readMongoPairs(options) {
-  // Dynamically require MongoDB driver
-  let MongoClient;
-  try {
-    ({ MongoClient } = require('mongodb'));
-  } catch (e) {
-    try {
-      ({ MongoClient } = await import('mongodb'));
-    } catch (err) {
-      throw new Error(
-        'The "mongodb" package is required. Install with: npm i mongodb'
-      );
-    }
-  }
-  const uri = options.mongoUri;
-  if (!uri) throw new Error('--mongo-uri is required when using --from-mongo');
-  const dbName =
-    options.mongoDb ||
-    uri.replace(/^.*\/(?!.*\/)/, '').replace(/\?.*$/, '') ||
-    undefined;
-  if (!dbName || dbName.toLowerCase().startsWith('mongodb')) {
-    throw new Error(
-      'Could not infer database name from URI. Provide --mongo-db explicitly.'
-    );
-  }
-  const collName = options.mongoColl || 'crops_history';
-  const stateField = options.stateField || 'state';
-  const districtField = options.districtField || 'district';
-  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 8000 });
-  await client.connect();
-  try {
-    const coll = client.db(dbName).collection(collName);
-    const pipeline = [
-      {
-        $match: { [stateField]: { $ne: null }, [districtField]: { $ne: null } },
-      },
-      {
-        $group: {
-          _id: { state: `$${stateField}`, district: `$${districtField}` },
-        },
-      },
-      { $project: { _id: 0, state: '$_id.state', district: '$_id.district' } },
-      { $sort: { state: 1, district: 1 } },
-    ];
-    const docs = await coll
-      .aggregate(pipeline, { allowDiskUse: true })
-      .toArray();
-    const rows = [];
-    const seen = new Set();
-    for (const d of docs) {
-      const state = (d.state || '').toString().trim();
-      const district = (d.district || '').toString().trim();
-      if (!state || !district) continue;
-      const key = `${state}::${district}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({ state, district });
-    }
-    return rows;
-  } finally {
-    await client.close().catch(() => {});
-  }
 }
 
 function loadCache() {
   try {
-    const txt = fs.readFileSync(CACHE_FILE, 'utf8');
-    return JSON.parse(txt);
-  } catch (_) {
+    return JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8'));
+  } catch (error) {
     return {};
   }
 }
@@ -213,68 +80,99 @@ function saveCache(cache) {
 }
 
 async function fetchJson(url) {
-  let f = typeof fetch !== 'undefined' ? fetch : null;
-  if (!f) {
+  let nativeFetch = typeof fetch === 'function' ? fetch : null;
+  if (!nativeFetch) {
     try {
-      f = (await import('node-fetch')).default;
-    } catch (_) {
-      throw new Error('fetch is not available and node-fetch is not installed');
+      nativeFetch = (await import('node-fetch')).default;
+    } catch (error) {
+      throw new Error(
+        'Install "node-fetch" or run on Node >=18 for built-in fetch support.'
+      );
     }
   }
-  const res = await f(url, {
+  const response = await nativeFetch(url, {
     headers: {
       'User-Agent': 'arcanix-mock-node-generator/1.0 (+https://github.com/)',
     },
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  if (!response.ok) {
+    throw new Error(`Geocode HTTP ${response.status}`);
+  }
+  return response.json();
 }
 
-async function geocodeDistrict(cache, state, district, offline) {
-  const key = `${state}|${district}`;
-  if (cache[key]) return cache[key];
-  if (offline) return null;
-  const q = encodeURIComponent(`${district}, ${state}, India`);
-  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}`;
-  try {
-    const data = await fetchJson(url);
-    await delay(1100); // be gentle with Nominatim
-    if (Array.isArray(data) && data.length) {
-      const d = data[0];
-      const bbox = d.boundingbox || null; // [south, north, west, east]
-      const lat = parseFloat(d.lat);
-      const lon = parseFloat(d.lon);
-      if (bbox && bbox.length === 4) {
-        const south = parseFloat(bbox[0]);
-        const north = parseFloat(bbox[1]);
-        const west = parseFloat(bbox[2]);
-        const east = parseFloat(bbox[3]);
-        cache[key] = {
-          bbox: { south, north, west, east },
-          center: { lat, lon },
-        };
-        return cache[key];
-      }
-      cache[key] = { bbox: null, center: { lat, lon } };
-      return cache[key];
+function buildBBoxFromExtent(extent, coords) {
+  if (Array.isArray(extent) && extent.length === 4) {
+    const [west, south, east, north] = extent.map((value) => Number(value));
+    if ([west, south, east, north].every((value) => Number.isFinite(value))) {
+      return { south, north, west, east };
     }
-  } catch (err) {
-    // fallthrough to null
+  }
+  if (coords && Number.isFinite(coords.lon) && Number.isFinite(coords.lat)) {
+    const deltaLat = 0.35;
+    const deltaLon = 0.35;
+    return {
+      south: coords.lat - deltaLat,
+      north: coords.lat + deltaLat,
+      west: coords.lon - deltaLon,
+      east: coords.lon + deltaLon,
+    };
   }
   return null;
 }
 
+async function geocodeDistrict(cache, state, district) {
+  const key = `${state}|${district}`;
+  if (cache[key]) {
+    return { data: cache[key], source: 'cache' };
+  }
+
+  const query = encodeURIComponent(`${district}, ${state}, India`);
+  const url = `https://photon.komoot.io/api/?q=${query}&limit=1`;
+  try {
+    const payload = await fetchJson(url);
+    if (payload && Array.isArray(payload.features) && payload.features.length) {
+      const feature = payload.features[0];
+      const coordsArray =
+        feature &&
+        feature.geometry &&
+        Array.isArray(feature.geometry.coordinates)
+          ? feature.geometry.coordinates
+          : null;
+      const coordinates = coordsArray
+        ? { lon: Number(coordsArray[0]), lat: Number(coordsArray[1]) }
+        : null;
+      const extent =
+        feature && Array.isArray(feature.bbox)
+          ? feature.bbox
+          : feature &&
+            feature.properties &&
+            Array.isArray(feature.properties.extent)
+          ? feature.properties.extent
+          : null;
+      const bbox = buildBBoxFromExtent(extent, coordinates);
+      const data = {
+        bbox,
+        center: coordinates,
+      };
+      cache[key] = data;
+      return { data, source: 'photon' };
+    }
+  } catch (error) {
+    log('GEO', `Geocoding failed for ${district}, ${state}: ${error.message}`);
+  }
+  return { data: null, source: 'fallback' };
+}
+
 function indiaFallbackBBox(state, district) {
-  // India approximate bbox
-  const IN = { south: 6.5, north: 35.5, west: 68.0, east: 97.5 };
-  // Slightly tighten by seeding on state/district so distinct areas per district
-  const rng = seededRng(`${state}|${district}`);
-  const latMargin = 2 + rng() * 4; // degrees
+  const INDIA = { south: 6.5, north: 35.5, west: 68.0, east: 97.5 };
+  const rng = seededRng(`${state}|${district}|bbox`);
+  const latMargin = 2 + rng() * 4;
   const lonMargin = 2 + rng() * 4;
-  const south = IN.south + latMargin * rng();
-  const north = IN.north - latMargin * rng();
-  const west = IN.west + lonMargin * rng();
-  const east = IN.east - lonMargin * rng();
+  const south = INDIA.south + latMargin * rng();
+  const north = INDIA.north - latMargin * rng();
+  const west = INDIA.west + lonMargin * rng();
+  const east = INDIA.east - lonMargin * rng();
   return { south, north, west, east };
 }
 
@@ -284,26 +182,22 @@ function samplePoint(bbox, rng) {
   return { lat: Number(lat.toFixed(6)), lon: Number(lon.toFixed(6)) };
 }
 
-function uniqueNodeId(state, district, type, index) {
-  const base = `${state}-${district}-${type}-${index}-${Date.now()}-${Math.random()}`;
+function buildNode(point, state, district, type, index) {
+  const idSeed = `${state}-${district}-${type}-${index}-${Date.now()}-${Math.random()}`;
   const short = crypto
     .createHash('sha1')
-    .update(base)
+    .update(idSeed)
     .digest('hex')
     .slice(0, 10)
     .toUpperCase();
-  return `${type === 'warehouse' ? 'WH' : 'FARM'}-${slugify(
+  const nodeId = `${type === 'warehouse' ? 'WH' : 'FARM'}-${slugify(
     district
   ).toUpperCase()}-${short}`;
-}
-
-function buildNodeDoc(point, state, district, type, idx) {
-  const nodeId = uniqueNodeId(state, district, type, idx);
   const name = `${type === 'warehouse' ? 'Warehouse' : 'Farm'} ${district} ${
-    idx + 1
+    index + 1
   }`;
   const regionId = `${slugify(state)}:${slugify(district)}`;
-  const capacity_kg =
+  const capacity =
     type === 'warehouse'
       ? Math.round(10000 + 40000 * Math.random())
       : Math.round(1000 + 4000 * Math.random());
@@ -312,92 +206,117 @@ function buildNodeDoc(point, state, district, type, idx) {
     type,
     name,
     regionId,
-    district,
     state,
+    district,
     location: { type: 'Point', coordinates: [point.lon, point.lat] },
-    capacity_kg,
+    capacity_kg: capacity,
   };
 }
 
-async function main() {
-  const opts = parseArgs();
-  let allPairs = [];
-  if (opts.fromMongo) {
-    try {
-      allPairs = await readMongoPairs(opts);
-    } catch (err) {
-      console.error('Mongo load failed:', err.message);
-      process.exit(1);
-    }
-  } else {
-    if (!fs.existsSync(opts.input)) {
-      console.error(`Input CSV not found: ${opts.input}`);
-      process.exit(1);
-    }
-    allPairs = readCsvPairs(opts.input);
+async function fetchDistricts() {
+  log(
+    'MONGO',
+    `Connecting to ${MONGO_URI} (db: ${MONGO_DB}, collection: ${MONGO_COLLECTION})`
+  );
+  const client = new MongoClient(MONGO_URI, { serverSelectionTimeoutMS: 8000 });
+  await client.connect();
+  try {
+    const coll = client.db(MONGO_DB).collection(MONGO_COLLECTION);
+    const pipeline = [
+      { $match: { state: { $ne: null }, district: { $ne: null } } },
+      { $group: { _id: { state: '$state', district: '$district' } } },
+      { $project: { _id: 0, state: '$_id.state', district: '$_id.district' } },
+      { $sort: { state: 1, district: 1 } },
+    ];
+    const rows = await coll
+      .aggregate(pipeline, { allowDiskUse: true })
+      .toArray();
+    const deduped = rows
+      .map((row) => ({
+        state: String(row.state || '').trim(),
+        district: String(row.district || '').trim(),
+      }))
+      .filter((row) => row.state && row.district);
+    log('MONGO', `Fetched ${deduped.length} distinct district entries.`);
+    return deduped;
+  } finally {
+    await client.close().catch(() => {});
   }
-  const pairs = opts.states
-    ? allPairs.filter((r) => opts.states.includes(r.state))
-    : allPairs;
-  if (!pairs.length) {
-    console.error('No (state,district) pairs found after filtering.');
+}
+
+async function generate() {
+  const districts = await fetchDistricts();
+  if (!districts.length) {
+    throw new Error('No districts returned from MongoDB.');
+  }
+
+  const cache = loadCache();
+  const nodes = [];
+
+  for (let index = 0; index < districts.length; index += 1) {
+    const { state, district } = districts[index];
+    log('DISTRICT', `(${index + 1}/${districts.length}) ${district}, ${state}`);
+
+    const { data, source } = await geocodeDistrict(cache, state, district);
+    const bbox =
+      data && data.bbox ? data.bbox : indiaFallbackBBox(state, district);
+    log(
+      'GEO',
+      `${district}, ${state} -> ${source}${
+        !data || !data.bbox ? ' (using fallback bbox)' : ''
+      }`
+    );
+
+    const rng = seededRng(`${state}|${district}`);
+    const total =
+      MIN_PER_DISTRICT +
+      Math.floor(rng() * (MAX_PER_DISTRICT - MIN_PER_DISTRICT + 1));
+
+    const farmCount = Math.max(3, Math.floor(total / 2));
+    const warehouseCount = Math.max(3, total - farmCount);
+    const types = [];
+    for (let i = 0; i < farmCount; i += 1) types.push('farm');
+    for (let i = 0; i < warehouseCount; i += 1) types.push('warehouse');
+    while (types.length < total) types.push(rng() < 0.5 ? 'farm' : 'warehouse');
+    for (let i = types.length - 1; i > 0; i -= 1) {
+      const swap = Math.floor(rng() * (i + 1));
+      [types[i], types[swap]] = [types[swap], types[i]];
+    }
+
+    const points = Array.from({ length: total }, () => samplePoint(bbox, rng));
+    points.forEach((point, idx) => {
+      nodes.push(buildNode(point, state, district, types[idx], idx));
+    });
+    log(
+      'NODES',
+      `Created ${total} nodes (${
+        types.filter((t) => t === 'farm').length
+      } farms, ${types.filter((t) => t === 'warehouse').length} warehouses)`
+    );
+  }
+
+  saveCache(cache);
+  return nodes;
+}
+
+async function main() {
+  try {
+    log('START', 'Generating nodes from MongoDB state/district data.');
+    const nodes = await generate();
+    fs.writeFileSync(OUTPUT_FILE, JSON.stringify(nodes, null, 2));
+    log('WRITE', `Wrote ${nodes.length} nodes to ${OUTPUT_FILE}`);
+    log(
+      'DONE',
+      'Import with: mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file "' +
+        OUTPUT_FILE +
+        '"'
+    );
+  } catch (error) {
+    console.error(`[ERROR] ${error.message}`);
     process.exit(1);
   }
-  const cache = loadCache();
-  const results = [];
-  for (const { state, district } of pairs) {
-    const geo = await geocodeDistrict(cache, state, district, opts.offline);
-    const bbox =
-      geo && geo.bbox ? geo.bbox : indiaFallbackBBox(state, district);
-    const rng = seededRng(`${state}|${district}`);
-    // ensure at least 6 so we can have >=3 each type
-    const count = Math.max(
-      opts.min,
-      Math.min(opts.max, 6 + Math.floor(rng() * (opts.max - 5)))
-    );
-    const minPerType = 3;
-    let farms = Math.max(minPerType, Math.floor(count / 2));
-    let warehouses = Math.max(minPerType, count - farms);
-    // Adjust if we exceeded count due to minimums
-    if (farms + warehouses > count) {
-      const excess = farms + warehouses - count;
-      if (warehouses > farms) warehouses -= excess;
-      else farms -= excess;
-    }
-    // First guarantee minPerType, then fill remaining randomly
-    const nodePoints = Array.from({ length: count }, () =>
-      samplePoint(bbox, rng)
-    );
-    const types = [];
-    for (let i = 0; i < farms; i++) types.push('farm');
-    for (let i = 0; i < warehouses; i++) types.push('warehouse');
-    // If still fewer than count due to rounding, add random types
-    while (types.length < count) types.push(rng() < 0.5 ? 'farm' : 'warehouse');
-    // Shuffle types with seeded rng
-    for (let i = types.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [types[i], types[j]] = [types[j], types[i]];
-    }
-    nodePoints.forEach((pt, idx) => {
-      const type = types[idx] || (rng() < 0.5 ? 'farm' : 'warehouse');
-      results.push(buildNodeDoc(pt, state, district, type, idx));
-    });
-  }
-  saveCache(cache);
-  fs.writeFileSync(opts.output, JSON.stringify(results, null, 2));
-  console.log(`\nGenerated ${results.length} node documents`);
-  console.log(`Output: ${opts.output}`);
-  console.log('\nImport into MongoDB with:');
-  console.log(
-    'mongoimport --uri "mongodb://127.0.0.1:27017/arcanix" --collection nodes --jsonArray --file "' +
-      opts.output +
-      '"'
-  );
 }
 
 if (require.main === module) {
-  main().catch((err) => {
-    console.error('Error:', err.message);
-    process.exit(1);
-  });
+  main();
 }
