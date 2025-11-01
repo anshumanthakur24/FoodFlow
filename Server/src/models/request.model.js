@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 
-const mongoose = require('mongoose');
 
 const requestSchema = new mongoose.Schema({
     requestId: {
@@ -35,8 +34,5 @@ const requestSchema = new mongoose.Schema({
         note: { type: String }
     }]
 });
-
-module.exports = mongoose.model('Request', requestSchema);
-
 
 export const Request = mongoose.model("Request", requestSchema);

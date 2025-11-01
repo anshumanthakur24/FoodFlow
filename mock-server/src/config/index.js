@@ -6,7 +6,7 @@ if (fs.existsSync(envPath)) {
   require('dotenv').config({ path: envPath });
 }
 
-const MAIN_API_URL = process.env.MAIN_API_URL || 'http://localhost:4000';
+const MAIN_API_URL = process.env.MAIN_API_URL || 'http://localhost:3001';
 const MAIN_API_ROUTES = {
   farm: process.env.MAIN_API_FARM_PATH || '/api/farm-events',
   shipment: process.env.MAIN_API_SHIPMENTS_PATH || '/api/shipments-ERROR', // Changed these because not required
