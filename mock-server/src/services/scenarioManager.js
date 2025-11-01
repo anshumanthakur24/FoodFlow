@@ -844,6 +844,7 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
     apiRequest: {
       url: `${MAIN_API_URL}${urlPath}`,
       body: payload,
+      method: urlPath.includes('/status') ? 'PATCH' : 'POST',
     },
   };
 }
@@ -920,6 +921,7 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     apiRequest: {
       url: `${MAIN_API_URL}${urlPath}`,
       body: payload,
+      method: urlPath.includes('/status') ? 'PATCH' : 'POST',
     },
   };
 }
