@@ -24,10 +24,12 @@ app.use("/api/v1/startMock",startScenario);
 import eventRouter from "./routes/event.route.js";
 import mapRouter from "./routes/map.routes.js";
 import nodeRouter from "./routes/node.route.js"
+import requestRouter from "./routes/ngo.route.js"
 
 // Routes Declaration
 app.use("/api/v1/event/",eventRouter);  //for recieving the data from the dummy server
 app.use("/api/v1/map",mapRouter);
 app.use("/api/v1/node",nodeRouter);
+app.use("/api/v1/request",requestRouter);
 
 export { app };

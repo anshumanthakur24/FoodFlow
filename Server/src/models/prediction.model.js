@@ -31,7 +31,7 @@ const predictionSchema = new mongoose.Schema({
     rawOutput: {
         type: Object
     }
-});
+},{ timestamps: true });
 
 
 export const Prediction = mongoose.model("Prediction", predictionSchema);

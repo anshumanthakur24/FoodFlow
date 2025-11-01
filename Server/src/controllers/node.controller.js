@@ -279,12 +279,28 @@ const startScenario = asyncHandler(async (req, res) => {
       throw new ApiError(404, "No nodes found in the database to send.");
     }
 
+    const ngos = await NGO.find();
+    if (ngos.length === 0) {
+      console.warn("⚠️ No NGOs found in the database — continuing without NGOs.");
+    }
+
     const formattedNodes = nodes.map((node, index) => ({
-      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(3, "0")}`, 
+      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(3, "0")}`,
       type: node.type,
       district: node.district,
-      state: node.regionId || "Unknown", 
-      location: node.location
+      state: node.regionId || "Unknown",
+      location: node.location,
+    }));
+
+    const formattedNGOs = ngos.map((ngo, index) => ({
+      ngoId: `NGO-${String(index + 1).padStart(3, "0")}`,
+      name: ngo.name,
+      address: ngo.address,
+      district: ngo.address?.district || "Unknown",
+      state: ngo.address?.state || "Unknown",
+      contact: ngo.contactInfo || {},
+      pendingRequests: ngo.requestStats?.pending || 0,
+      totalRequests: ngo.requestStats?.total || 0,
     }));
 
     const payload = {
@@ -294,28 +310,29 @@ const startScenario = asyncHandler(async (req, res) => {
       batchSize: 20,
       intervalMs: 2000,
       nodes: formattedNodes,
+      ngos: formattedNGOs, 
       durationMinutes: 5,
-      probabilities: { "farm": 0.7, "shipment": 0.25, "ngo": 0.05 }
-
+      probabilities: { farm: 0.7, shipment: 0.25, ngo: 0.05 },
     };
 
     const response = await axios.post(endpoint, payload, {
       headers: { "Content-Type": "application/json" },
-      timeout: 10000
+      timeout: 10000,
     });
+
 
     return res.status(200).json(
       new ApiResponse(
         200,
         {
           sentNodes: formattedNodes.length,
+          sentNGOs: formattedNGOs.length,
           payloadSent: payload,
-          externalResponse: response.data
+          externalResponse: response.data,
         },
-        "Scenario started successfully and nodes sent."
+        "Scenario started successfully. Nodes and NGOs sent."
       )
     );
-
   } catch (error) {
     if (error.response) {
       throw new ApiError(
@@ -340,5 +357,6 @@ const startScenario = asyncHandler(async (req, res) => {
     }
   }
 });
+
 
 export { createNode, deleteNode, getNodesByRegion, getAllNodes,getAllDistricts,startScenario };

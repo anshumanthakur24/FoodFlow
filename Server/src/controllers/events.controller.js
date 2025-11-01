@@ -8,10 +8,10 @@ const storeEvent = asyncHandler(async (req, res) => {
   try {
     const { time, type, location, payload } = req.body;
 
-    if ( !time || !type || !location || !payload) {
+    if (!time || !type || !location || !payload) {
       throw new ApiError(
         400,
-        "Missing required fields. 'eventId', 'time', 'type', 'location', and 'payload' are mandatory."
+        "Missing required fields. 'time', 'type', 'location', and 'payload' are mandatory."
       );
     }
 
@@ -27,7 +27,7 @@ const storeEvent = asyncHandler(async (req, res) => {
       );
     }
 
-
+    // store event in DB
     const newEvent = await Event.create({
       time: new Date(time),
       type,
@@ -36,7 +36,9 @@ const storeEvent = asyncHandler(async (req, res) => {
     });
 
     let createdBatch = null;
+    let createdRequest = null;
 
+    // 🟩 FARM PRODUCTION EVENT
     if (type === "farm_production") {
       const { emittedFrom, quantity_kg } = payload;
 
@@ -92,6 +94,40 @@ const storeEvent = asyncHandler(async (req, res) => {
       });
     }
 
+    // 🟦 NGO REQUEST EVENT
+    else if (type === "ngo_request") {
+      const { requesterNode, requestID, items, createdOn, requiredBefore } = payload;
+
+      if (!requesterNode || !requestID) {
+        throw new ApiError(
+          400,
+          "Missing required fields in payload for 'ngo_request'. 'requesterNode' and 'requestID' are required."
+        );
+      }
+
+      // Find NGO by name or ID
+      const ngoDoc =
+        (await NGO.findOne({ name: requesterNode })) ||
+        (mongoose.isValidObjectId(requesterNode)
+          ? await NGO.findById(requesterNode)
+          : null);
+
+      if (!ngoDoc) {
+        throw new ApiError(404, `NGO '${requesterNode}' not found in database.`);
+      }
+
+      // Create the request entry
+      createdRequest = await Request.create({
+        requesterNode: ngoDoc._id,
+        requestID,
+        items: items || [],
+        createdOn: createdOn ? new Date(createdOn) : new Date(time),
+        requiredBefore: requiredBefore ? new Date(requiredBefore) : null,
+        status: "pending",
+      });
+    }
+
+    // ✅ RESPONSE
     return res.status(201).json(
       new ApiResponse(
         201,
@@ -99,9 +135,13 @@ const storeEvent = asyncHandler(async (req, res) => {
           event: newEvent,
           batchCreated: !!createdBatch,
           batch: createdBatch || null,
+          requestCreated: !!createdRequest,
+          request: createdRequest || null,
         },
         createdBatch
           ? "Event stored and new batch created successfully."
+          : createdRequest
+          ? "Event stored and new NGO request created successfully."
           : "Event stored successfully."
       )
     );
@@ -184,7 +224,7 @@ const createNGORequest = asyncHandler(async (req, res) => {
 
 const newShipment = asyncHandler(async (req, res) => {
     return res
-            .status(500)
+            .status(200)
             .json(
                 new ApiResponse(
                     500,
@@ -192,7 +232,6 @@ const newShipment = asyncHandler(async (req, res) => {
                     "No need for Shipment data"
                 )
             )
-
 });
 
 const shipmentUpdate = asyncHandler(async (req, res) => {
