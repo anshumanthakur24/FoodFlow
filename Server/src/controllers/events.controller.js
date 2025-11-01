@@ -1,11 +1,13 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
-import {ApiError} from "../utils/ApiError.js"
+import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import {Event} from "../models/event.model.js";
-import {Request} from "../models/request.model.js";
-import {Node} from "../models/node.model.js";
-import {Batch} from "../models/batch.model.js";
-import {NGO} from "../models/NGO.model.js";
+import { Event } from "../models/event.model.js";
+import { Request } from "../models/request.model.js";
+import { Event } from "../models/event.model.js";
+import { Request } from "../models/request.model.js";
+import { Node } from "../models/node.model.js";
+import { Batch } from "../models/batch.model.js";
+import { NGO } from "../models/NGO.model.js";
 import mongoose from "mongoose";
 
 const storeEvent = asyncHandler(async (req, res) => {
@@ -48,7 +50,7 @@ const storeEvent = asyncHandler(async (req, res) => {
 
       if (!node || !node.nodeId) {
         console.log(payload);
-        
+
         throw new ApiError(
           400,
           "Missing 'emittedFrom.nodeId' in payload for 'farm_production'."
@@ -92,7 +94,7 @@ const storeEvent = asyncHandler(async (req, res) => {
           },
         ],
         metadata: {
-        district: node.district,
+          district: node.district,
           state: node.state,
           coordinates: node.location || {},
         },
@@ -102,7 +104,8 @@ const storeEvent = asyncHandler(async (req, res) => {
 
     // 🟦 NGO REQUEST EVENT
     else if (type === "ngo_request") {
-      const { requesterNode, requestID, items, createdOn, requiredBefore } = payload;
+      const { requesterNode, requestID, items, createdOn, requiredBefore } =
+        payload;
 
       if (!requesterNode || !requestID) {
         throw new ApiError(
@@ -119,7 +122,10 @@ const storeEvent = asyncHandler(async (req, res) => {
           : null);
 
       if (!ngoDoc) {
-        throw new ApiError(404, `NGO '${requesterNode}' not found in database.`);
+        throw new ApiError(
+          404,
+          `NGO '${requesterNode}' not found in database.`
+        );
       }
 
       // Create the request entry
@@ -164,86 +170,87 @@ const storeEvent = asyncHandler(async (req, res) => {
 });
 
 const createNGORequest = asyncHandler(async (req, res) => {
-    try {
-        const { requestId, requesterNode, items, requiredBy_iso, status, fulfilledBy, history } = req.body;
+  try {
+    const {
+      requestId,
+      requesterNode,
+      items,
+      requiredBy_iso,
+      status,
+      fulfilledBy,
+      history,
+    } = req.body;
 
-        if (!requestId || !requesterNode || !items || !Array.isArray(items) || items.length === 0) {
-            throw new ApiError(
-                400,
-                "Missing required fields. 'requestId', 'requesterNode', and 'items' (non-empty array) are mandatory."
-            );
-        }
-
-        const existingRequest = await Request.findOne({ requestId });
-        if (existingRequest) {
-            throw new ApiError(409, `Request with ID '${requestId}' already exists.`);
-        }
-
-        for (const item of items) {
-            if (!item.foodType || typeof item.required_kg !== 'number') {
-                throw new ApiError(
-                    400,
-                    "Each item must include a valid 'foodType' and numeric 'required_kg'."
-                );
-            }
-        }
-
-        const newRequest = await Request.create({
-            requestId,
-            requesterNode,
-            items,
-            requiredBy_iso: requiredBy_iso ? new Date(requiredBy_iso) : null,
-            status: status || 'open',
-            fulfilledBy: fulfilledBy || null,
-            history: history || [{
-                time: new Date(),
-                action: "created",
-                note: "Request created successfully."
-            }]
-        });
-
-        return res
-            .status(201)
-            .json(
-                new ApiResponse(
-                    201,
-                    newRequest,
-                    "NGO request stored successfully."
-                )
-            );
-
-    } catch (error) {
-        if (error instanceof ApiError) {
-            throw error;
-        } else {
-            throw new ApiError(
-                500,
-                "Failed to store NGO request.",
-                [error.message],
-                error.stack
-            );
-        }
+    if (
+      !requestId ||
+      !requesterNode ||
+      !items ||
+      !Array.isArray(items) ||
+      items.length === 0
+    ) {
+      throw new ApiError(
+        400,
+        "Missing required fields. 'requestId', 'requesterNode', and 'items' (non-empty array) are mandatory."
+      );
     }
-});  
 
+    const existingRequest = await Request.findOne({ requestId });
+    if (existingRequest) {
+      throw new ApiError(409, `Request with ID '${requestId}' already exists.`);
+    }
 
+    for (const item of items) {
+      if (!item.foodType || typeof item.required_kg !== "number") {
+        throw new ApiError(
+          400,
+          "Each item must include a valid 'foodType' and numeric 'required_kg'."
+        );
+      }
+    }
+
+    const newRequest = await Request.create({
+      requestId,
+      requesterNode,
+      items,
+      requiredBy_iso: requiredBy_iso ? new Date(requiredBy_iso) : null,
+      status: status || "open",
+      fulfilledBy: fulfilledBy || null,
+      history: history || [
+        {
+          time: new Date(),
+          action: "created",
+          note: "Request created successfully.",
+        },
+      ],
+    });
+
+    return res
+      .status(201)
+      .json(
+        new ApiResponse(201, newRequest, "NGO request stored successfully.")
+      );
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    } else {
+      throw new ApiError(
+        500,
+        "Failed to store NGO request.",
+        [error.message],
+        error.stack
+      );
+    }
+  }
+});
 
 const newShipment = asyncHandler(async (req, res) => {
-    return res
-            .status(200)
-            .json(
-                new ApiResponse(
-                    500,
-                    {},
-                    "No need for Shipment data"
-                )
-            )
+  return res
+    .status(200)
+    .json(new ApiResponse(500, {}, "No need for Shipment data"));
 });
 
 const shipmentUpdate = asyncHandler(async (req, res) => {
-                                                                //using web sockets , get data from dummy server on live location tracking and logs it in the events + shipmentLocation.model;;
-
+  //using web sockets , get data from dummy server on live location tracking and logs it in the events + shipmentLocation.model;;
 });
 
-
-export {storeEvent,createNGORequest,newShipment};
+export { storeEvent, createNGORequest, newShipment };
