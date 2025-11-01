@@ -106,7 +106,7 @@ All emitted events now include an `emittedFrom` object inside the payload with t
       "state": "Maharashtra",
       "location": { "lat": 18.52, "lon": 73.86 }
     },
-    "batch": { "batchId": "...", "quantity_kg": 2500 },
+    "batch": { "quantity_kg": 2500 },
     "quantity_kg": 2500
   }
 }

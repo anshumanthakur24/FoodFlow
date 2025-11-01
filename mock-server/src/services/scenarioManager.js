@@ -66,32 +66,41 @@ async function synthesizeRegions(filterList) {
       { crop: { $in: filterList } },
     ];
   }
-  const seasons = await CropSeason.find(query)
+
+  const rows = await CropSeason.find(query)
     .sort({ state: 1, district: 1, crop: 1 })
-    .limit(500)
+    .limit(5000)
     .lean();
-  if (!seasons.length) return [];
+
   const seen = new Set();
   const synthetic = [];
-  for (const entry of seasons) {
-    const state = entry.state || null;
-    const district = entry.district || null;
-    const key = `${state || ''}|${district || ''}`;
+  for (const row of rows) {
+    const state = row.state || null;
+    const district = row.district || null;
+    const key = `${state || ''}:${district || ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const parts = [district, state].filter(Boolean);
-    const name = parts.join(', ') || entry.crop || 'Synthetic Region';
-    const code =
-      district || state || entry.crop || `synthetic-${synthetic.length + 1}`;
+
+    const baseName = district || state || 'Region';
+    const slugBase = [state, district]
+      .filter(Boolean)
+      .join('-')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '-');
+    const code = slugBase ? `synthetic-${slugBase}`.slice(0, 48) : null;
+
     synthetic.push({
-      name,
+      name: baseName,
       state,
       district,
       code,
-      attributes: { synthetic: true, source: 'crop-seasons' },
+      slug: slugBase || null,
+      attributes: { synthetic: true, source: 'crop-season' },
     });
+
     if (synthetic.length >= 100) break;
   }
+
   return synthetic;
 }
 
@@ -272,7 +281,6 @@ function buildFarmPayload(
   const point = toPointCoordinates(region);
   const batchId = `batch-${eventId.slice(0, 24)}`;
   const batch = {
-    batchId,
     parentBatchId: null,
     foodType: cropName,
     quantity_kg: quantityKg,
@@ -308,55 +316,58 @@ function buildFarmPayload(
   };
 
   return {
-    eventId,
-    time: eventTimestamp.toISOString(),
-    type: 'farm_production',
-    location: { type: 'Point', coordinates: point },
-    payload: {
-      scenarioId: runtime.scenario._id.toString(),
-      tickIndex: runtime.tickIndex,
-      region: {
-        id: region._id ? region._id.toString() : null,
-        name: region.name || null,
-        state: region.state || null,
-        district: region.district || null,
-        code: region.code || null,
-      },
-      crop: {
-        name: cropName,
-        season: cropEntry ? cropEntry.season || null : null,
-        year: parseCropYear(
-          cropEntry ? cropEntry.source_file : null,
-          eventTimestamp
-        ),
-        sowingWindow: {
-          startMonth: cropEntry
-            ? cropEntry.season_sowing_start_month || null
-            : null,
-          endMonth: cropEntry
-            ? cropEntry.season_sowing_end_month || null
+    event: {
+      eventId,
+      time: eventTimestamp.toISOString(),
+      type: 'farm_production',
+      location: { type: 'Point', coordinates: point },
+      payload: {
+        scenarioId: runtime.scenario._id.toString(),
+        tickIndex: runtime.tickIndex,
+        region: {
+          id: region._id ? region._id.toString() : null,
+          name: region.name || null,
+          state: region.state || null,
+          district: region.district || null,
+          code: region.code || null,
+        },
+        crop: {
+          name: cropName,
+          season: cropEntry ? cropEntry.season || null : null,
+          year: parseCropYear(
+            cropEntry ? cropEntry.source_file : null,
+            eventTimestamp
+          ),
+          sowingWindow: {
+            startMonth: cropEntry
+              ? cropEntry.season_sowing_start_month || null
+              : null,
+            endMonth: cropEntry
+              ? cropEntry.season_sowing_end_month || null
+              : null,
+          },
+          harvestWindow: {
+            startMonth: cropEntry
+              ? cropEntry.season_harvest_start_month || null
+              : null,
+            endMonth: cropEntry
+              ? cropEntry.season_harvest_end_month || null
+              : null,
+          },
+        },
+        quantity_kg: quantityKg,
+        quantity_tonnes: Number(producedTonnes.toFixed(2)),
+        metrics: {
+          area_hectare: cropEntry ? cropEntry.area_hectare || null : null,
+          yield_tonha: cropEntry ? cropEntry.yield_tonha || null : null,
+          production_tonnes: cropEntry
+            ? cropEntry.production_tonnes || null
             : null,
         },
-        harvestWindow: {
-          startMonth: cropEntry
-            ? cropEntry.season_harvest_start_month || null
-            : null,
-          endMonth: cropEntry
-            ? cropEntry.season_harvest_end_month || null
-            : null,
-        },
+        batch,
       },
-      quantity_kg: quantityKg,
-      quantity_tonnes: Number(producedTonnes.toFixed(2)),
-      metrics: {
-        area_hectare: cropEntry ? cropEntry.area_hectare || null : null,
-        yield_tonha: cropEntry ? cropEntry.yield_tonha || null : null,
-        production_tonnes: cropEntry
-          ? cropEntry.production_tonnes || null
-          : null,
-      },
-      batch,
     },
+    batchId,
   };
 }
 
@@ -419,7 +430,6 @@ function buildNgoPayload(
   const regionCode = region.code || region.name || eventId;
   const requesterNode = pseudoObjectId(`ngo-node:${regionCode}`);
   return {
-    requestId: eventId,
     requesterNode,
     items: needs.map((item) => ({
       foodType: item.item,
@@ -475,7 +485,6 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
         quantity_kg: quantityKg,
         quantity_tonnes: quantityTonnes,
         batch: {
-          batchId,
           parentBatchId: null,
           foodType: 'Mixed Produce',
           quantity_kg: quantityKg,
@@ -546,7 +555,7 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
   const fallback = 40 + rng() * 120;
   const producedTonnes = baseProduction > 0 ? baseProduction * scale : fallback;
   const eventId = createEventId(eventKey);
-  const payload = buildFarmPayload(
+  const { event: farmEvent, batchId } = buildFarmPayload(
     runtime,
     region,
     cropEntry,
@@ -560,10 +569,7 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
     crop: cropEntry ? cropEntry.crop || null : null,
     season: cropEntry ? cropEntry.season || null : null,
     availableTonnes: Number(producedTonnes.toFixed(2)),
-    batchId:
-      payload.payload && payload.payload.batch
-        ? payload.payload.batch.batchId
-        : null,
+    batchId,
     timestamp: eventTimestamp,
   });
   return {
@@ -572,13 +578,13 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
     record: {
       scenarioId: runtime.scenario._id,
       type: 'farm',
-      payload,
+      payload: farmEvent,
       tickIndex: runtime.tickIndex,
       timestamp: eventTimestamp,
     },
     apiRequest: {
       url: `${MAIN_API_URL}${MAIN_API_ROUTES.farm}`,
-      body: payload,
+      body: farmEvent,
     },
   };
 }
@@ -724,7 +730,6 @@ async function createNgoEvent(runtime, rng, eventKey, eventTimestamp) {
     const eventId = createEventId(eventKey);
     const emittedFrom = nodeToEmittedFrom(node);
     const payload = {
-      requestId: eventId,
       requesterNode: node.nodeId || null,
       items: needs.map((n) => ({
         foodType: n.item,
