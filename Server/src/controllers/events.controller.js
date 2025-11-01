@@ -44,7 +44,7 @@ const storeEvent = asyncHandler(async (req, res) => {
 
     // 🟩 FARM PRODUCTION EVENT
     if (type === "farm_production") {
-      const { node, quantity_kg } = payload;
+      const { node, quantity_kg ,batch} = payload;
 
       if (!node || !node.nodeId) {
         console.log(payload);
@@ -78,7 +78,7 @@ const storeEvent = asyncHandler(async (req, res) => {
         originNode: nodeDoc._id,
         currentNode: nodeDoc._id,
         shelf_life_hours: null,
-        manufacture_date: new Date(time),
+        manufacture_date: new Date(batch.dateOfCreation),
         expiry_iso: null,
         initial_temp_c: null,
         freshnessPct: 100,
