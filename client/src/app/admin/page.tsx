@@ -86,16 +86,32 @@ export default function AdminDashboard() {
   const [selectedDistrict, setSelectedDistrict] = useState<string>("");
   const [filteredNodes, setFilteredNodes] = useState<Node[]>([]);
   const [activeTab, setActiveTab] = useState<string>("all");
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [allNodes, setAllNodes] = useState<Record<string, Node[]>>(MOCK_DATA);
 
-  const handleDistrictChange = useCallback((district: string) => {
-    setSelectedDistrict(district);
-    if (district) {
-      setFilteredNodes(MOCK_DATA[district] || []);
-    } else {
-      setFilteredNodes([]);
-    }
-    setActiveTab("all");
-  }, []);
+  // Form state for new node
+  const [newNode, setNewNode] = useState({
+    type: "farm" as "farm" | "warehouse" | "ngo" | "processing",
+    name: "",
+    regionId: "",
+    capacity_kg: "",
+    contact: "",
+    latitude: "",
+    longitude: "",
+  });
+
+  const handleDistrictChange = useCallback(
+    (district: string) => {
+      setSelectedDistrict(district);
+      if (district) {
+        setFilteredNodes(allNodes[district] || []);
+      } else {
+        setFilteredNodes([]);
+      }
+      setActiveTab("all");
+    },
+    [allNodes]
+  );
 
   const farms = filteredNodes.filter((node) => node.type === "farm");
   const warehouses = filteredNodes.filter((node) => node.type === "warehouse");
@@ -118,6 +134,106 @@ export default function AdminDashboard() {
   };
 
   const displayNodes = getDisplayNodes();
+
+  // Handle form submission
+  const handleAddNode = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (
+      !newNode.name ||
+      !newNode.regionId ||
+      !newNode.latitude ||
+      !newNode.longitude
+    ) {
+      alert("Please fill in all required fields");
+      return;
+    }
+
+    // Generate new node ID
+    const typePrefix = newNode.type.toUpperCase().substring(0, 2);
+    const existingNodes = Object.values(allNodes).flat();
+    const maxId = existingNodes.reduce(
+      (max, node) => Math.max(max, parseInt(node.id) || 0),
+      0
+    );
+    const newId = (maxId + 1).toString();
+    const nodeIdCounter =
+      existingNodes.filter((n) => n.type === newNode.type).length + 1;
+    const newNodeId = `${typePrefix}${String(nodeIdCounter).padStart(3, "0")}`;
+
+    const createdNode: Node = {
+      id: newId,
+      nodeId: newNodeId,
+      type: newNode.type,
+      name: newNode.name,
+      regionId: newNode.regionId,
+      location: {
+        coordinates: [
+          parseFloat(newNode.longitude),
+          parseFloat(newNode.latitude),
+        ],
+      },
+      capacity_kg: newNode.capacity_kg
+        ? parseInt(newNode.capacity_kg)
+        : undefined,
+      contact: newNode.contact || undefined,
+    };
+
+    // Add to allNodes
+    const updatedNodes = { ...allNodes };
+    if (!updatedNodes[newNode.regionId]) {
+      updatedNodes[newNode.regionId] = [];
+    }
+    updatedNodes[newNode.regionId] = [
+      ...updatedNodes[newNode.regionId],
+      createdNode,
+    ];
+    setAllNodes(updatedNodes);
+
+    // Update filtered nodes if same district
+    if (selectedDistrict === newNode.regionId) {
+      setFilteredNodes(updatedNodes[newNode.regionId]);
+    }
+
+    // Reset form and close modal
+    setNewNode({
+      type: "farm",
+      name: "",
+      regionId: "",
+      capacity_kg: "",
+      contact: "",
+      latitude: "",
+      longitude: "",
+    });
+    setIsAddModalOpen(false);
+
+    alert(
+      `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} added successfully!`
+    );
+  };
+
+  // Handle delete node
+  const handleDeleteNode = (nodeId: string, nodeName: string) => {
+    if (!confirm(`Are you sure you want to delete "${nodeName}"?`)) {
+      return;
+    }
+
+    // Remove from allNodes
+    const updatedNodes = { ...allNodes };
+    Object.keys(updatedNodes).forEach((district) => {
+      updatedNodes[district] = updatedNodes[district].filter(
+        (node) => node.id !== nodeId
+      );
+    });
+    setAllNodes(updatedNodes);
+
+    // Update filtered nodes if viewing that district
+    if (selectedDistrict) {
+      setFilteredNodes(updatedNodes[selectedDistrict] || []);
+    }
+
+    alert(`🗑️ "${nodeName}" deleted successfully!`);
+  };
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black">
@@ -181,14 +297,41 @@ export default function AdminDashboard() {
               ))}
             </select>
           </div>
-          {selectedDistrict && (
-            <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
-              <span>Showing:</span>
-              <span className="font-medium text-zinc-900 dark:text-zinc-100">
-                {selectedDistrict}
-              </span>
-            </div>
-          )}
+          <div className="flex items-center gap-3">
+            {selectedDistrict && (
+              <div className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+                <span>Showing:</span>
+                <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                  {selectedDistrict}
+                </span>
+              </div>
+            )}
+            <button
+              onClick={() => {
+                // Pre-fill district if one is selected
+                if (selectedDistrict) {
+                  setNewNode({ ...newNode, regionId: selectedDistrict });
+                }
+                setIsAddModalOpen(true);
+              }}
+              className="flex items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 transition-colors dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+            >
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 4v16m8-8H4"
+                />
+              </svg>
+              Add New Node
+            </button>
+          </div>
         </div>
 
         {selectedDistrict && filteredNodes.length > 0 && (
@@ -298,6 +441,9 @@ export default function AdminDashboard() {
                     <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
                       Location
                     </th>
+                    <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -337,12 +483,34 @@ export default function AdminDashboard() {
                           {node.location.coordinates[1].toFixed(4)},{" "}
                           {node.location.coordinates[0].toFixed(4)}
                         </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => handleDeleteNode(node.id, node.name)}
+                            className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30 transition-colors"
+                            title="Delete node"
+                          >
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                            Delete
+                          </button>
+                        </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
                       <td
-                        colSpan={6}
+                        colSpan={7}
                         className="px-4 py-12 text-center text-sm text-zinc-500 dark:text-zinc-400"
                       >
                         No facilities found in this category
@@ -407,6 +575,194 @@ export default function AdminDashboard() {
           </div>
         )}
       </main>
+
+      {/* Add Node Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded-lg bg-white shadow-xl dark:bg-zinc-900">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
+              <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                Add New Node
+              </h2>
+              <button
+                onClick={() => setIsAddModalOpen(false)}
+                className="text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              >
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleAddNode} className="p-6">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {/* Node Type */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    Node Type <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={newNode.type}
+                    onChange={(e) =>
+                      setNewNode({
+                        ...newNode,
+                        type: e.target.value as
+                          | "farm"
+                          | "warehouse"
+                          | "ngo"
+                          | "processing",
+                      })
+                    }
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    required
+                  >
+                    <option value="farm">🌾 Farm</option>
+                    <option value="warehouse">📦 Warehouse</option>
+                    <option value="ngo">❤️ NGO</option>
+                    <option value="processing">🏭 Processing</option>
+                  </select>
+                </div>
+
+                {/* Name */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newNode.name}
+                    onChange={(e) =>
+                      setNewNode({ ...newNode, name: e.target.value })
+                    }
+                    placeholder="e.g., Green Valley Farm"
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    required
+                  />
+                </div>
+
+                {/* District */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    District/Region <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={newNode.regionId}
+                    onChange={(e) =>
+                      setNewNode({ ...newNode, regionId: e.target.value })
+                    }
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    required
+                  >
+                    <option value="">Select district</option>
+                    {MOCK_DISTRICTS.map((district) => (
+                      <option key={district} value={district}>
+                        {district}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Contact */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    Contact
+                  </label>
+                  <input
+                    type="text"
+                    value={newNode.contact}
+                    onChange={(e) =>
+                      setNewNode({ ...newNode, contact: e.target.value })
+                    }
+                    placeholder="+91 98765 43210"
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                  />
+                </div>
+
+                {/* Capacity */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    Capacity (kg)
+                  </label>
+                  <input
+                    type="number"
+                    value={newNode.capacity_kg}
+                    onChange={(e) =>
+                      setNewNode({ ...newNode, capacity_kg: e.target.value })
+                    }
+                    placeholder="5000"
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                  />
+                </div>
+
+                {/* Latitude */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    Latitude <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={newNode.latitude}
+                    onChange={(e) =>
+                      setNewNode({ ...newNode, latitude: e.target.value })
+                    }
+                    placeholder="19.0760"
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    required
+                  />
+                </div>
+
+                {/* Longitude */}
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">
+                    Longitude <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="any"
+                    value={newNode.longitude}
+                    onChange={(e) =>
+                      setNewNode({ ...newNode, longitude: e.target.value })
+                    }
+                    placeholder="72.8777"
+                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-900 focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    required
+                  />
+                </div>
+              </div>
+
+              {/* Form Actions */}
+              <div className="mt-6 flex items-center justify-end gap-3 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                >
+                  Add Node
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
