@@ -1,11 +1,6 @@
 import mongoose from "mongoose";
 
 const eventSchema = new mongoose.Schema({
-    eventId: {
-        type: String,
-        required: true,
-        unique: true
-    },
     time: {
         type: Date,
         required: true

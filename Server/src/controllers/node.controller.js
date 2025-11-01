@@ -266,7 +266,10 @@ const startScenario = asyncHandler(async (req, res) => {
   try {
     const baseURL = process.env.SCENARIO_BASE_URL || req.body.baseURL;
     if (!baseURL) {
-      throw new ApiError(400, "Missing 'baseURL'. Please provide the target endpoint base URL.");
+      throw new ApiError(
+        400,
+        "Missing 'baseURL'. Please provide the target endpoint base URL."
+      );
     }
 
     const endpoint = `${baseURL}/scenario/start`;
@@ -276,18 +279,37 @@ const startScenario = asyncHandler(async (req, res) => {
       throw new ApiError(404, "No nodes found in the database to send.");
     }
 
-    const payload = { nodes };
+    const formattedNodes = nodes.map((node, index) => ({
+      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(3, "0")}`, 
+      type: node.type,
+      district: node.district,
+      state: node.regionId || "Unknown", 
+      location: node.location
+    }));
+
+    const payload = {
+      name: "HarvestRun-1",
+      seed: "arcanix-2025",
+      startDate: "2025-11-01T00:00:00Z",
+      batchSize: 20,
+      intervalMs: 2000,
+      nodes: formattedNodes,
+      durationMinutes: 5,
+      probabilities: { "farm": 0.7, "shipment": 0.25, "ngo": 0.05 }
+
+    };
 
     const response = await axios.post(endpoint, payload, {
       headers: { "Content-Type": "application/json" },
-      timeout: 10000 
+      timeout: 10000
     });
 
     return res.status(200).json(
       new ApiResponse(
         200,
         {
-          sentNodes: nodes.length,
+          sentNodes: formattedNodes.length,
+          payloadSent: payload,
           externalResponse: response.data
         },
         "Scenario started successfully and nodes sent."
@@ -302,7 +324,6 @@ const startScenario = asyncHandler(async (req, res) => {
         [error.response.data]
       );
     } else if (error.request) {
-      // No response received
       throw new ApiError(
         502,
         "No response from external API. Please check the baseURL or network connection."
