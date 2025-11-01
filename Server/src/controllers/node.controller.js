@@ -2,6 +2,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Node } from "../models/node.model.js";
+import { NGO } from "../models/NGO.model.js";
+import axios from "axios";
 
 const createNode = asyncHandler(async (req, res) => {
   try {
@@ -264,7 +266,8 @@ const getAllDistricts = asyncHandler(async (req, res) => {
 
 const startScenario = asyncHandler(async (req, res) => {
   try {
-    const baseURL = process.env.SCENARIO_BASE_URL || req.body.baseURL;
+    const baseURL =
+      process.env.SCENARIO_BASE_URL || "http://localhost:5001/api";
     if (!baseURL) {
       throw new ApiError(
         400,
@@ -291,21 +294,20 @@ const startScenario = asyncHandler(async (req, res) => {
         3,
         "0"
       )}`,
+      nodeId: node._id.toString(),
+      name: node.name,
       type: node.type,
       district: node.district,
-      state: node.regionId || "Unknown",
+      regionId: node.regionId || "Unknown",
       location: node.location,
     }));
 
     const formattedNGOs = ngos.map((ngo, index) => ({
-      ngoId: `NGO-${String(index + 1).padStart(3, "0")}`,
+      ngoId: ngo._id.toString(),
       name: ngo.name,
       address: ngo.address,
-      district: ngo.address?.district || "Unknown",
-      state: ngo.address?.state || "Unknown",
       contact: ngo.contactInfo || {},
-      pendingRequests: ngo.requestStats?.pending || 0,
-      totalRequests: ngo.requestStats?.total || 0,
+      requestStats: ngo.requestStats,
     }));
 
     const payload = {
@@ -338,11 +340,12 @@ const startScenario = asyncHandler(async (req, res) => {
       )
     );
   } catch (error) {
+    console.log(error);
     if (error.response) {
       throw new ApiError(
         error.response.status,
         "External API error during scenario start.",
-        [error.response.data]
+        [error.data]
       );
     } else if (error.request) {
       throw new ApiError(
