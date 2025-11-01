@@ -2,6 +2,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Node } from "../models/node.model.js";
+import { NGO } from "../models/NGO.model.js";
+import axios from "axios";
 
 const createNode = asyncHandler(async (req, res) => {
   try {
@@ -264,7 +266,7 @@ const getAllDistricts = asyncHandler(async (req, res) => {
 
 const startScenario = asyncHandler(async (req, res) => {
   try {
-    const baseURL = process.env.SCENARIO_BASE_URL || req.body.baseURL;
+    const baseURL = process.env.SCENARIO_BASE_URL || 'http://localhost:5001/api';
     if (!baseURL) {
       throw new ApiError(
         400,
@@ -285,7 +287,7 @@ const startScenario = asyncHandler(async (req, res) => {
     }
 
     const formattedNodes = nodes.map((node, index) => ({
-      nodeId: `${node.type.toUpperCase()}-${String(index + 1).padStart(3, "0")}`,
+      nodeId: `${node.type}-${String(index + 1).padStart(3, "0")}`,
       type: node.type,
       district: node.district,
       state: node.regionId || "Unknown",
@@ -338,7 +340,7 @@ const startScenario = asyncHandler(async (req, res) => {
       throw new ApiError(
         error.response.status,
         "External API error during scenario start.",
-        [error.response.data]
+        [error.data]
       );
     } else if (error.request) {
       throw new ApiError(

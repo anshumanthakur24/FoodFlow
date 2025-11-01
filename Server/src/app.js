@@ -19,7 +19,7 @@ import {startScenario} from "./controllers/node.controller.js"
 app.use(logger);
 
 
-app.use("/api/v1/startMock",startScenario);
+app.post("/api/v1/startMock",startScenario);
 // Routes Import
 import eventRouter from "./routes/event.route.js";
 import mapRouter from "./routes/map.routes.js";
