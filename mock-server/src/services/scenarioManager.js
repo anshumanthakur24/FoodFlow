@@ -88,9 +88,12 @@ function normalizeTimeAdvance(input) {
   return { ...defaults };
 }
 
-function buildRequestLifecycleUrl(template, requestId) {
+function buildRequestLifecycleUrl(template, ledgerEntry) {
   if (!template) return null;
-  const encoded = encodeURIComponent(requestId);
+  const reqId = ledgerEntry?.requestId || '';
+  const mongoId = ledgerEntry?.mongoId || '';
+  const encodedReqId = encodeURIComponent(reqId);
+  const encodedMongoId = encodeURIComponent(mongoId);
   const placeholders = [
     '{requestId}',
     '{REQUEST_ID}',
@@ -98,18 +101,27 @@ function buildRequestLifecycleUrl(template, requestId) {
     ':requestID',
     ':requestId',
     ':id',
+    '{requestObjectId}',
+    '{REQUEST_OBJECT_ID}',
   ];
   let route = template;
   let replaced = false;
   for (const token of placeholders) {
     if (route.includes(token)) {
-      route = route.replace(token, encoded);
-      replaced = true;
+      if (token.toLowerCase().includes('object')) {
+        if (mongoId) {
+          route = route.replace(token, encodedMongoId);
+          replaced = true;
+        }
+      } else {
+        route = route.replace(token, encodedReqId);
+        replaced = true;
+      }
     }
   }
   if (!replaced) {
     const base = route.endsWith('/') ? route.slice(0, -1) : route;
-    route = `${base}/${encoded}`;
+    route = `${base}/${encodedReqId}`;
   }
   return route;
 }
@@ -428,7 +440,8 @@ function buildFarmPayload(
   cropEntry,
   producedTonnes,
   eventTimestamp,
-  eventId
+  eventId,
+  previousTimestamp
 ) {
   const quantityKg = Number((producedTonnes * 1000).toFixed(2));
   const regionCode = region.code || region.slug || region.name || eventId;
@@ -453,6 +466,12 @@ function buildFarmPayload(
           }
         : null,
   };
+  const eventIso = eventTimestamp.toISOString();
+  const previousIso =
+    previousTimestamp instanceof Date &&
+    !Number.isNaN(previousTimestamp.getTime())
+      ? previousTimestamp.toISOString()
+      : null;
   const batch = {
     parentBatchId: null,
     foodType: cropName,
@@ -464,7 +483,7 @@ function buildFarmPayload(
     shelf_life_hours: cropEntry
       ? (cropEntry.season_growth_months || 4) * 30 * 24
       : 90 * 24,
-    manufacture_date: eventTimestamp.toISOString(),
+    manufacture_date: eventIso,
     expiry_iso: cropEntry
       ? new Date(
           eventTimestamp.getTime() +
@@ -475,7 +494,7 @@ function buildFarmPayload(
     freshnessPct: 100,
     history: [
       {
-        time: eventTimestamp.toISOString(),
+        time: eventIso,
         action: 'harvested',
         from: null,
         to: nodeObjectId,
@@ -486,60 +505,67 @@ function buildFarmPayload(
       scenarioId: runtime.scenario._id.toString(),
       tickIndex: runtime.tickIndex,
     },
+    dateOfCreation_iso: eventIso,
+    dateOfCreation: eventIso,
+    createdAt_iso: eventIso,
+    createdAt: eventIso,
   };
+  const payload = {
+    eventId,
+    scenarioId: runtime.scenario._id.toString(),
+    tickIndex: runtime.tickIndex,
+    emittedFrom,
+    region: {
+      id: region._id ? region._id.toString() : null,
+      name: region.name || null,
+      state: region.state || null,
+      district: region.district || null,
+      code: region.code || null,
+    },
+    crop: {
+      name: cropName,
+      season: cropEntry ? cropEntry.season || null : null,
+      year: parseCropYear(
+        cropEntry ? cropEntry.source_file : null,
+        eventTimestamp
+      ),
+      sowingWindow: {
+        startMonth: cropEntry
+          ? cropEntry.season_sowing_start_month || null
+          : null,
+        endMonth: cropEntry ? cropEntry.season_sowing_end_month || null : null,
+      },
+      harvestWindow: {
+        startMonth: cropEntry
+          ? cropEntry.season_harvest_start_month || null
+          : null,
+        endMonth: cropEntry ? cropEntry.season_harvest_end_month || null : null,
+      },
+    },
+    quantity_kg: quantityKg,
+    quantity_tonnes: Number(producedTonnes.toFixed(2)),
+    metrics: {
+      area_hectare: cropEntry ? cropEntry.area_hectare || null : null,
+      yield_tonha: cropEntry ? cropEntry.yield_tonha || null : null,
+      production_tonnes: cropEntry ? cropEntry.production_tonnes || null : null,
+    },
+    generatedAt_iso: eventIso,
+    generatedAt: eventIso,
+    createdAt_iso: eventIso,
+    createdAt: eventIso,
+    batch,
+  };
+  if (previousIso) {
+    payload.previousEvent_iso = previousIso;
+    payload.previousEvent = previousIso;
+  }
 
   return {
     event: {
-      time: eventTimestamp.toISOString(),
+      time: eventIso,
       type: 'farm_production',
       location: { type: 'Point', coordinates: point },
-      payload: {
-        eventId,
-        scenarioId: runtime.scenario._id.toString(),
-        tickIndex: runtime.tickIndex,
-        emittedFrom,
-        region: {
-          id: region._id ? region._id.toString() : null,
-          name: region.name || null,
-          state: region.state || null,
-          district: region.district || null,
-          code: region.code || null,
-        },
-        crop: {
-          name: cropName,
-          season: cropEntry ? cropEntry.season || null : null,
-          year: parseCropYear(
-            cropEntry ? cropEntry.source_file : null,
-            eventTimestamp
-          ),
-          sowingWindow: {
-            startMonth: cropEntry
-              ? cropEntry.season_sowing_start_month || null
-              : null,
-            endMonth: cropEntry
-              ? cropEntry.season_sowing_end_month || null
-              : null,
-          },
-          harvestWindow: {
-            startMonth: cropEntry
-              ? cropEntry.season_harvest_start_month || null
-              : null,
-            endMonth: cropEntry
-              ? cropEntry.season_harvest_end_month || null
-              : null,
-          },
-        },
-        quantity_kg: quantityKg,
-        quantity_tonnes: Number(producedTonnes.toFixed(2)),
-        metrics: {
-          area_hectare: cropEntry ? cropEntry.area_hectare || null : null,
-          yield_tonha: cropEntry ? cropEntry.yield_tonha || null : null,
-          production_tonnes: cropEntry
-            ? cropEntry.production_tonnes || null
-            : null,
-        },
-        batch,
-      },
+      payload,
     },
     batchId,
   };
@@ -583,7 +609,13 @@ function chooseFulfillmentCandidate(runtime, rng) {
   return candidates[index];
 }
 
-async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
+async function createFarmEvent(
+  runtime,
+  rng,
+  eventKey,
+  eventTimestamp,
+  previousTimestamp
+) {
   // Node-driven mode (preferred): generate directly from farm nodes
   if (runtime.nodeMode) {
     if (!runtime.farmNodes.length) return null;
@@ -595,46 +627,66 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
     const point = toPointCoordinates(node);
     const batchId = `batch-${eventId.slice(0, 24)}`;
     const emittedFrom = nodeToEmittedFrom(node);
-    const apiPayload = {
-      time: eventTimestamp.toISOString(),
-      type: 'farm_production',
-      location: { type: 'Point', coordinates: point },
-      payload: {
-        eventId,
+    const eventIso = eventTimestamp.toISOString();
+    const previousIso =
+      previousTimestamp instanceof Date &&
+      !Number.isNaN(previousTimestamp.getTime())
+        ? previousTimestamp.toISOString()
+        : null;
+    const batchPayload = {
+      parentBatchId: null,
+      foodType: 'Mixed Produce',
+      quantity_kg: quantityKg,
+      original_quantity_kg: quantityKg,
+      originNode: node.nodeId || null,
+      currentNode: node.nodeId || null,
+      status: 'stored',
+      shelf_life_hours: 90 * 24,
+      manufacture_date: eventIso,
+      expiry_iso: null,
+      initial_temp_c: 20,
+      freshnessPct: 100,
+      history: [
+        {
+          time: eventIso,
+          action: 'harvested',
+          from: null,
+          to: node.nodeId || null,
+          note: `Harvest batch for ${node.nodeId || 'farm-node'}`,
+        },
+      ],
+      metadata: {
         scenarioId: runtime.scenario._id.toString(),
         tickIndex: runtime.tickIndex,
-        emittedFrom,
-        node: emittedFrom,
-        quantity_kg: quantityKg,
-        quantity_tonnes: quantityTonnes,
-        batch: {
-          parentBatchId: null,
-          foodType: 'Mixed Produce',
-          quantity_kg: quantityKg,
-          original_quantity_kg: quantityKg,
-          originNode: node.nodeId || null,
-          currentNode: node.nodeId || null,
-          status: 'stored',
-          shelf_life_hours: 90 * 24,
-          manufacture_date: eventTimestamp.toISOString(),
-          expiry_iso: null,
-          initial_temp_c: 20,
-          freshnessPct: 100,
-          history: [
-            {
-              time: eventTimestamp.toISOString(),
-              action: 'harvested',
-              from: null,
-              to: node.nodeId || null,
-              note: `Harvest batch for ${node.nodeId || 'farm-node'}`,
-            },
-          ],
-          metadata: {
-            scenarioId: runtime.scenario._id.toString(),
-            tickIndex: runtime.tickIndex,
-          },
-        },
       },
+      dateOfCreation_iso: eventIso,
+      dateOfCreation: eventIso,
+      createdAt_iso: eventIso,
+      createdAt: eventIso,
+    };
+    const payload = {
+      eventId,
+      scenarioId: runtime.scenario._id.toString(),
+      tickIndex: runtime.tickIndex,
+      emittedFrom,
+      node: emittedFrom,
+      quantity_kg: quantityKg,
+      quantity_tonnes: quantityTonnes,
+      generatedAt_iso: eventIso,
+      generatedAt: eventIso,
+      createdAt_iso: eventIso,
+      createdAt: eventIso,
+      batch: batchPayload,
+    };
+    if (previousIso) {
+      payload.previousEvent_iso = previousIso;
+      payload.previousEvent = previousIso;
+    }
+    const apiPayload = {
+      time: eventIso,
+      type: 'farm_production',
+      location: { type: 'Point', coordinates: point },
+      payload,
     };
     runtime.farmInventory.push({
       eventId,
@@ -684,7 +736,8 @@ async function createFarmEvent(runtime, rng, eventKey, eventTimestamp) {
     cropEntry,
     producedTonnes,
     eventTimestamp,
-    eventId
+    eventId,
+    previousTimestamp
   );
   runtime.farmInventory.push({
     eventId,
@@ -767,7 +820,7 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
 
   const urlPath = buildRequestLifecycleUrl(
     MAIN_API_ROUTES.requestApproveTemplate,
-    ledgerEntry.requestId
+    ledgerEntry
   );
   if (!urlPath) return null;
 
@@ -843,7 +896,7 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
 
   const urlPath = buildRequestLifecycleUrl(
     MAIN_API_ROUTES.requestFulfillTemplate,
-    ledgerEntry.requestId
+    ledgerEntry
   );
   if (!urlPath) return null;
 
@@ -871,10 +924,21 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
   };
 }
 
-function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
+function createRequestEvent(
+  runtime,
+  rng,
+  eventKey,
+  eventTimestamp,
+  previousTimestamp
+) {
   const requestKey = createEventId(`${eventKey}:request`);
   const requestId = `REQ-${requestKey.slice(0, 12).toUpperCase()}`; // stable id reused across approval/fulfilment
   const items = createRequestItems(rng);
+  const previousIso =
+    previousTimestamp instanceof Date &&
+    !Number.isNaN(previousTimestamp.getTime())
+      ? previousTimestamp.toISOString()
+      : null;
 
   let requesterNodeId;
   let requesterDetails;
@@ -934,6 +998,10 @@ function createRequestEvent(runtime, rng, eventKey, eventTimestamp) {
       requester: requesterDetails,
     },
   };
+  if (previousIso) {
+    recordPayload.metadata.previousEvent_iso = previousIso;
+    recordPayload.metadata.previousEvent = previousIso;
+  }
 
   const ledgerEntry = {
     requestId,
@@ -1107,33 +1175,71 @@ async function generateEvents(runtime, tickTimestamp) {
   return events;
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, method = 'POST') {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAIN_API_TIMEOUT_MS);
   try {
     const response = await fetchApi(url, {
-      method: 'POST',
+      method,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      console.error('Main API error', response.status, text);
+    let data = null;
+    try {
+      data = await response.clone().json();
+    } catch (_) {
+      try {
+        data = await response.text();
+      } catch (_) {
+        data = null;
+      }
     }
+    if (!response.ok) {
+      console.error('Main API error', response.status, data || '');
+    }
+    return { ok: response.ok, status: response.status, data };
   } catch (err) {
     console.error('Main API error', err.message);
+    return { ok: false, status: 0, data: null };
   } finally {
     clearTimeout(timeout);
   }
 }
 
-async function dispatchEvents(events) {
+async function dispatchEvents(events, runtime) {
   if (!events.length) return;
-  const tasks = events.map((event) =>
-    postJson(event.apiRequest.url, event.apiRequest.body)
-  );
-  await Promise.allSettled(tasks);
+  for (const event of events) {
+    const method = event.apiRequest.method || 'POST';
+    const res = await postJson(
+      event.apiRequest.url,
+      event.apiRequest.body,
+      method
+    );
+    if (event.type === 'request' && res && res.ok) {
+      try {
+        const body = res.data;
+        // Try to extract the created Mongo _id from common API response shapes
+        const created =
+          (body && body.data) || // ApiResponse style
+          (body && body.request) ||
+          body ||
+          null;
+        const mongoId =
+          (created && created._id) ||
+          (created && created.data && created.data._id) ||
+          null;
+        const requestId =
+          event.apiRequest.body && event.apiRequest.body.requestId;
+        if (mongoId && requestId && runtime && runtime.requestLedger) {
+          const entry = runtime.requestLedger.get(requestId);
+          if (entry) entry.mongoId = String(mongoId);
+        }
+      } catch (_) {
+        // ignore mapping errors
+      }
+    }
+  }
 }
 
 async function persistEvents(events) {
@@ -1160,19 +1266,44 @@ function scheduleNext(runtime) {
         await runtime.stop(true);
         return;
       }
-      const tickTimestamp = new Date(
-        runtime.scenario.startDate.getTime() +
-          runtime.tickIndex * runtime.intervalMs
-      );
+      const baseCursor =
+        runtime.simulatedCursor instanceof Date &&
+        !Number.isNaN(runtime.simulatedCursor.getTime())
+          ? runtime.simulatedCursor
+          : new Date(
+              runtime.scenario.startDate.getTime() +
+                runtime.tickIndex * runtime.intervalMs
+            );
+      const tickTimestamp = new Date(baseCursor.getTime());
       const events = await generateEvents(runtime, tickTimestamp);
       if (events.length) {
+        const latestEvent = events.reduce((latest, event) => {
+          if (event && event.timestamp instanceof Date) {
+            if (!latest || event.timestamp.getTime() > latest.getTime()) {
+              return event.timestamp;
+            }
+          }
+          return latest;
+        }, null);
         await persistEvents(events);
         await Scenario.updateOne(
           { _id: runtime.scenario._id },
           { $inc: { 'stats.totalEventsSent': events.length } }
         );
         runtime.sentEvents += events.length;
-        await dispatchEvents(events);
+        await dispatchEvents(events, runtime);
+        const currentCursorMs = baseCursor.getTime();
+        const latestMs = latestEvent
+          ? Math.max(latestEvent.getTime(), currentCursorMs)
+          : currentCursorMs;
+        runtime.simulatedCursor = new Date(latestMs);
+      } else {
+        const minAdvanceMinutes = Math.max(
+          runtime.timeAdvance?.minMinutes || DEFAULT_TIME_ADVANCE_MIN_MINUTES,
+          1
+        );
+        const advanceMs = minAdvanceMinutes * 60000;
+        runtime.simulatedCursor = new Date(baseCursor.getTime() + advanceMs);
       }
       runtime.tickIndex += 1;
       scheduleNext(runtime);
@@ -1190,6 +1321,7 @@ function scheduleNext(runtime) {
 }
 
 function createRuntime(scenario, options) {
+  const timeAdvance = options.timeAdvance || normalizeTimeAdvance();
   const runtime = {
     scenario,
     batchSize: options.batchSize,
@@ -1200,10 +1332,14 @@ function createRuntime(scenario, options) {
     nodes: Array.isArray(options.nodes) ? options.nodes : [],
     nodeMode: Array.isArray(options.nodes) && options.nodes.length > 0,
     ngoProfiles: normalizeNgoProfiles(options.ngos),
+    timeAdvance,
     active: false,
     timer: null,
     tickIndex: 0,
     startedAt: null,
+    simulatedCursor: new Date(scenario.startDate.getTime()),
+    lastEventTimestamp: null,
+    previousEventTimestamp: null,
     regions: [],
     warehouses: [],
     warehouseNodes: [],
@@ -1227,6 +1363,9 @@ function createRuntime(scenario, options) {
       runtime.requestLedger.clear();
       runtime.openRequests.clear();
       runtime.farmInventory = [];
+      runtime.lastEventTimestamp = null;
+      runtime.previousEventTimestamp = null;
+      runtime.simulatedCursor = new Date(runtime.scenario.startDate.getTime());
       activeScenarios.delete(runtime.scenario._id.toString());
       if (updateStatus) {
         await Scenario.updateOne(
@@ -1261,6 +1400,9 @@ function createRuntime(scenario, options) {
     runtime.requestLedger.clear();
     runtime.openRequests.clear();
     runtime.farmInventory = [];
+    runtime.lastEventTimestamp = null;
+    runtime.previousEventTimestamp = null;
+    runtime.simulatedCursor = new Date(runtime.scenario.startDate.getTime());
     scheduleNext(runtime);
   };
 
@@ -1277,6 +1419,9 @@ async function startScenario(input) {
   const batchSize = normalizeBatchSize(input.batchSize);
   const intervalMs = normalizeInterval(input.intervalMs);
   const probabilities = normalizeProbabilities(input.probabilities);
+  const timeAdvance = normalizeTimeAdvance(
+    input.timeAdvance ?? input.timeAdvanceMinutes
+  );
   const startDateInput = input.startDate
     ? new Date(input.startDate)
     : new Date();
@@ -1293,6 +1438,7 @@ async function startScenario(input) {
       batchSize,
       intervalMs,
       regionFilter: Array.isArray(input.regions) ? input.regions : [],
+      timeAdvance,
     },
     probabilities,
     status: 'running',
@@ -1305,6 +1451,8 @@ async function startScenario(input) {
     durationMs,
     regionFilter: Array.isArray(input.regions) ? input.regions : [],
     nodes: Array.isArray(input.nodes) ? input.nodes : [],
+    timeAdvance,
+    ngos: Array.isArray(input.ngos) ? input.ngos : [],
   });
   activeScenarios.set(scenario._id.toString(), runtime);
   try {
