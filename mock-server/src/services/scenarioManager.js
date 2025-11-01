@@ -87,22 +87,23 @@ function normalizeNgoProfiles(list) {
         typeof ngo.district === 'string' ? ngo.district.trim() : null;
       const address =
         typeof ngo.address === 'string' ? ngo.address.trim() : null;
-      const contact = ngo.contact && typeof ngo.contact === 'object'
-        ? {
-            person:
-              typeof ngo.contact.person === 'string'
-                ? ngo.contact.person.trim()
-                : null,
-            email:
-              typeof ngo.contact.email === 'string'
-                ? ngo.contact.email.trim()
-                : null,
-            phone:
-              typeof ngo.contact.phone === 'string'
-                ? ngo.contact.phone.trim()
-                : null,
-          }
-        : { person: null, email: null, phone: null };
+      const contact =
+        ngo.contact && typeof ngo.contact === 'object'
+          ? {
+              person:
+                typeof ngo.contact.person === 'string'
+                  ? ngo.contact.person.trim()
+                  : null,
+              email:
+                typeof ngo.contact.email === 'string'
+                  ? ngo.contact.email.trim()
+                  : null,
+              phone:
+                typeof ngo.contact.phone === 'string'
+                  ? ngo.contact.phone.trim()
+                  : null,
+            }
+          : { person: null, email: null, phone: null };
       const externalIdRaw =
         typeof ngo.ngoId === 'string' && ngo.ngoId.trim().length
           ? ngo.ngoId.trim()
@@ -1093,7 +1094,7 @@ function createRuntime(scenario, options) {
     regionFilter: options.regionFilter,
     nodes: Array.isArray(options.nodes) ? options.nodes : [],
     nodeMode: Array.isArray(options.nodes) && options.nodes.length > 0,
-  ngoProfiles: normalizeNgoProfiles(options.ngos),
+    ngoProfiles: normalizeNgoProfiles(options.ngos),
     active: false,
     timer: null,
     tickIndex: 0,
