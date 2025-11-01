@@ -1,5 +1,27 @@
 # Scenario Manager Mock Server Usage
 
+## If by chance docker compose is not able to use auto-download.py
+
+Use
+
+```js
+link =
+  'https://drive.google.com/drive/u/0/folders/1gQwjKeqUemDCtn98AmEA7qCry-lC9Rvd';
+```
+
+to download all files in `mock-server/crop-generation-data/` manually.
+then use
+
+```powershell
+python excel_to_mongo_v2.py --folder ./crop-generation-data --mongo-uri mongodb://localhost:27017 --db agriculture
+```
+
+at last use
+
+```powershell
+python infer_seasons.py --mongo-uri mongodb://localhost:27017 --db agriculture --input_coll crops_history --grouping district --min_coverage 0.75
+```
+
 ## Configuration
 
 Create a `.env` file in `mock-server/` with environment overrides as needed:
