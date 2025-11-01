@@ -20,9 +20,9 @@ PORT=5001
 MONGO_URI=mongodb://127.0.0.1:27017/arcanix
 MAIN_API_URL=http://localhost:3001
 MAIN_API_FARM_PATH=/api/v1/event/farm
-MAIN_API_SHIPMENTS_PATH=/api/v1/event/shipment
-MAIN_API_REQUEST_CREATE_PATH=/api/v1/event/request
-MAIN_API_REQUEST_ACCEPT_PATH=/api/v1/event/request/accept
+MAIN_API_REQUEST_CREATE_PATH=/api/v1/request/createRequest
+MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestId}/approved
+MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestId}/fulfilled
 SCENARIO_MAX_BATCH_SIZE=200
 SCENARIO_MIN_INTERVAL_MS=500
 SCENARIO_PROB_FARM=0.65
@@ -30,6 +30,16 @@ SCENARIO_PROB_REQUEST=0.35
 ```
 
 Any unset value falls back to the defaults above.
+
+## Request Lifecycle
+
+Request creation events follow the main API schema. Each `request` payload includes `requestId`, `requesterNode`, `items`, and lifecycle history. The simulator then:
+
+- POSTs to `MAIN_API_REQUEST_CREATE_PATH` when a request is created.
+- After a random 1–6 day delay, POSTs to `MAIN_API_REQUEST_APPROVE_TEMPLATE` (with `{requestId}` substituted) to mark the request as approved.
+- For the majority of approved requests, POSTs to `MAIN_API_REQUEST_FULFILL_TEMPLATE` after an additional 4–48 simulation hours to mark them fulfilled (reusing the same `requestId`).
+
+Requests that are never approved remain tracked internally with `pending` status so the mock server can surface their history via the events collection.
 
 ## API Endpoints
 
