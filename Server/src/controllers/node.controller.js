@@ -225,4 +225,4 @@ const getAllNodes = asyncHandler(async (req, res) => {
   }
 });
 
-export {createNode,deleteNode,getNodesByRegion};
+export {createNode,deleteNode,getNodesByRegion,getAllNodes};
