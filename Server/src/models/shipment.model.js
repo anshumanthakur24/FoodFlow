@@ -6,15 +6,15 @@ const shipmentSchema = new mongoose.Schema({
         type: String
     },
     batchIds:[{
-        type: mongoose.Schema.type.ObjectId,
+        type: mongoose.Schema.Types.ObjectId,
         ref: 'Batch'
     }],
     fromNode:{
-        type: mongoose.Schema.type.ObjectId,
+        type: mongoose.Schema.Types.ObjectId,
         ref:'Node'
     },
     toNode: {
-        type: mongoose.Schema.type.ObjectId,
+        type: mongoose.Schema.Types.ObjectId,
         ref:'Node'
     },
     start_iso: {

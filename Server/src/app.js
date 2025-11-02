@@ -34,5 +34,3 @@ app.use("/api/v1/ngo", ngoRouter);
 app.use("/api/ml", mlRouter);
 
 export { app };
-
-export { app };
