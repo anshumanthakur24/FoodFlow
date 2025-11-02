@@ -1,6 +1,3 @@
-// Test script to verify probability normalization behavior
-// Run with: node test-probability-normalization.js
-
 const MIN_PROBABILITY = 0.01;
 const DEFAULT_PROBABILITIES = { farm: 0.65, request: 0.35 };
 

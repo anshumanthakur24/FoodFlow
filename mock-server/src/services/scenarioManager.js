@@ -977,8 +977,8 @@ function createRequestEvent(
   let requesterNodeId;
   let requesterDetails;
 
-  if (runtime.nodeMode) {
-    if (!runtime.ngoNodes.length) return null;
+  // Try NGO nodes first if in node mode
+  if (runtime.nodeMode && runtime.ngoNodes.length > 0) {
     const node = runtime.ngoNodes[Math.floor(rng() * runtime.ngoNodes.length)];
     requesterDetails = nodeToEmittedFrom(node);
     const candidate =
@@ -992,13 +992,23 @@ function createRequestEvent(
     requesterNodeId = looksLikeObjectId
       ? candidateStr
       : pseudoObjectId(`node:${candidateStr}`);
-  } else {
-    if (!runtime.regions.length) return null;
+  }
+  // Fall back to regions if no NGO nodes available OR not in node mode
+  else if (runtime.regions && runtime.regions.length > 0) {
     const region = runtime.regions[Math.floor(rng() * runtime.regions.length)];
     requesterDetails = regionToRequesterDetails(region);
     requesterNodeId = pseudoObjectId(
       `region:${region.code || region.district || region.name || requestId}`
     );
+  }
+  // No requesters available at all
+  else {
+    console.log(
+      `[SCENARIO]   └─ ERROR: No requesters available (ngoNodes: ${
+        runtime.ngoNodes?.length || 0
+      }, regions: ${runtime.regions?.length || 0})`
+    );
+    return null;
   }
 
   const createdOn = eventTimestamp;
@@ -1057,12 +1067,22 @@ function createRequestEvent(
   runtime.requestLedger.set(requestId, ledgerEntry);
   runtime.openRequests.set(requestId, ledgerEntry);
 
+  console.log(
+    `[SCENARIO] Creating request event: ${requestId} (requester: ${requesterNodeId.slice(
+      0,
+      8
+    )}...)`
+  );
+
   if (rng() < acceptanceChance) {
     const minDays = 1;
     const maxDays = 6;
     const dayOffset = minDays + Math.floor(rng() * (maxDays - minDays + 1));
     const acceptAt = new Date(eventTimestamp.getTime() + dayOffset * 86400000);
     ledgerEntry.acceptAt = acceptAt;
+    console.log(
+      `[SCENARIO]   └─ Will approve in ${dayOffset} days (at ${acceptAt.toISOString()})`
+    );
     const fulfillChance = 0.7;
     if (rng() < fulfillChance) {
       const fulfillCandidate = chooseFulfillmentCandidate(runtime, rng);
@@ -1102,9 +1122,16 @@ function createRequestEvent(
           };
         }
         ledgerEntry.fulfillAt = fulfillAt;
+        console.log(
+          `[SCENARIO]   └─ Will fulfill ~${Math.round(
+            hourOffset
+          )} hours after approval (at ${fulfillAt.toISOString()})`
+        );
       }
     }
     runtime.pendingApprovals.push(ledgerEntry);
+  } else {
+    console.log(`[SCENARIO]   └─ Will NOT be approved (random chance)`);
   }
 
   return {
@@ -1128,9 +1155,19 @@ function collectRequestLifecycleEvents(runtime, tickTimestamp) {
   const ready = [];
 
   if (runtime.pendingApprovals.length) {
+    console.log(
+      `[SCENARIO] Checking ${
+        runtime.pendingApprovals.length
+      } pending approval(s) at ${tickTimestamp.toISOString()}`
+    );
     const waitingApprovals = [];
     for (const entry of runtime.pendingApprovals) {
       if (entry.acceptAt && entry.acceptAt <= tickTimestamp) {
+        console.log(
+          `[SCENARIO]   ✓ Approval ready for ${
+            entry.requestId
+          } (scheduled: ${entry.acceptAt.toISOString()})`
+        );
         const approvalEvent = createRequestAcceptanceEvent(runtime, entry);
         if (approvalEvent) ready.push(approvalEvent);
         runtime.openRequests.delete(entry.requestId);
@@ -1145,9 +1182,19 @@ function collectRequestLifecycleEvents(runtime, tickTimestamp) {
   }
 
   if (runtime.pendingFulfillments.length) {
+    console.log(
+      `[SCENARIO] Checking ${
+        runtime.pendingFulfillments.length
+      } pending fulfillment(s) at ${tickTimestamp.toISOString()}`
+    );
     const waitingFulfillments = [];
     for (const entry of runtime.pendingFulfillments) {
       if (entry.fulfillAt && entry.fulfillAt <= tickTimestamp) {
+        console.log(
+          `[SCENARIO]   ✓ Fulfillment ready for ${
+            entry.requestId
+          } (scheduled: ${entry.fulfillAt.toISOString()})`
+        );
         const fulfillmentEvent = createRequestFulfilledEvent(runtime, entry);
         if (fulfillmentEvent) ready.push(fulfillmentEvent);
       } else {
@@ -1157,6 +1204,14 @@ function collectRequestLifecycleEvents(runtime, tickTimestamp) {
     runtime.pendingFulfillments = waitingFulfillments;
   }
 
+  if (ready.length) {
+    console.log(
+      `[SCENARIO] Generated ${ready.length} lifecycle event(s): ${ready
+        .map((e) => e.type)
+        .join(', ')}`
+    );
+  }
+
   return ready;
 }
 
@@ -1164,6 +1219,17 @@ async function generateEvents(runtime, tickTimestamp) {
   const events = [];
   const lifecycleEvents = collectRequestLifecycleEvents(runtime, tickTimestamp);
   if (lifecycleEvents.length) events.push(...lifecycleEvents);
+
+  console.log(
+    `[SCENARIO] Tick ${runtime.tickIndex}: Generating ${
+      runtime.batchSize
+    } new event(s) (probabilities: farm=${(
+      runtime.probabilities.farm * 100
+    ).toFixed(0)}%, request=${(runtime.probabilities.request * 100).toFixed(
+      0
+    )}%)`
+  );
+
   const baseKey = `${runtime.scenario.seed}:${runtime.scenario._id}:${runtime.tickIndex}`;
   for (let i = 0; i < runtime.batchSize; i += 1) {
     const eventKey = `${baseKey}:${i}`;
@@ -1176,7 +1242,17 @@ async function generateEvents(runtime, tickTimestamp) {
     const farmThreshold = runtime.probabilities.farm || 0;
     const requestThreshold =
       farmThreshold + (runtime.probabilities.request || 0);
+
+    console.log(
+      `[SCENARIO]   Event ${i + 1}/${runtime.batchSize}: roll=${roll.toFixed(
+        3
+      )} (farm<${farmThreshold.toFixed(3)}, request<${requestThreshold.toFixed(
+        3
+      )})`
+    );
+
     if (roll < farmThreshold) {
+      console.log(`[SCENARIO]   └─ Generating farm event`);
       event = await createFarmEvent(
         runtime,
         rng,
@@ -1186,6 +1262,7 @@ async function generateEvents(runtime, tickTimestamp) {
       );
     } else {
       if (roll < requestThreshold) {
+        console.log(`[SCENARIO]   └─ Generating request event`);
         event = createRequestEvent(
           runtime,
           rng,
@@ -1195,6 +1272,7 @@ async function generateEvents(runtime, tickTimestamp) {
         );
       }
       if (!event) {
+        console.log(`[SCENARIO]   └─ Fallback to farm event`);
         event = await createFarmEvent(
           runtime,
           rng,
@@ -1206,6 +1284,19 @@ async function generateEvents(runtime, tickTimestamp) {
     }
     if (event) events.push(event);
   }
+
+  const eventTypeCounts = {};
+  events.forEach((e) => {
+    eventTypeCounts[e.type] = (eventTypeCounts[e.type] || 0) + 1;
+  });
+  console.log(
+    `[SCENARIO] Tick ${runtime.tickIndex} complete: ${
+      events.length
+    } total event(s) - ${Object.entries(eventTypeCounts)
+      .map(([type, count]) => `${type}:${count}`)
+      .join(', ')}`
+  );
+
   return events;
 }
 
@@ -1458,6 +1549,29 @@ function createRuntime(scenario, options) {
   };
 
   runtime.start = async () => {
+    console.log(`[SCENARIO] ═══════════════════════════════════════════════`);
+    console.log(`[SCENARIO] Starting scenario: ${runtime.scenario.name}`);
+    console.log(`[SCENARIO] Seed: ${runtime.scenario.seed}`);
+    console.log(
+      `[SCENARIO] Mode: ${runtime.nodeMode ? 'node-driven' : 'region-based'}`
+    );
+    console.log(`[SCENARIO] Batch size: ${runtime.batchSize} events per tick`);
+    console.log(`[SCENARIO] Interval: ${runtime.intervalMs}ms between ticks`);
+    console.log(
+      `[SCENARIO] Probabilities: farm=${(
+        runtime.probabilities.farm * 100
+      ).toFixed(0)}%, request=${(runtime.probabilities.request * 100).toFixed(
+        0
+      )}%`
+    );
+    console.log(
+      `[SCENARIO] Duration: ${
+        runtime.durationMs
+          ? `${runtime.durationMs / 60000} minutes`
+          : 'unlimited'
+      }`
+    );
+
     if (runtime.nodeMode) {
       // Classify nodes for node-driven simulation
       runtime.farmNodes = runtime.nodes.filter(
@@ -1469,10 +1583,27 @@ function createRuntime(scenario, options) {
       runtime.ngoNodes = runtime.nodes.filter(
         (n) => (n.type || '').toLowerCase() === 'ngo'
       );
+      console.log(
+        `[SCENARIO] Loaded ${runtime.nodes.length} node(s): ${runtime.farmNodes.length} farm, ${runtime.warehouseNodes.length} warehouse, ${runtime.ngoNodes.length} ngo`
+      );
+
+      // Load regions as fallback for request generation if no NGO nodes
+      if (runtime.ngoNodes.length === 0) {
+        runtime.regions = await loadRegions(runtime.regionFilter);
+        runtime.warehouses = await loadWarehouses(runtime.regions);
+        console.log(
+          `[SCENARIO] No NGO nodes provided, loaded ${runtime.regions.length} region(s) as fallback for requests`
+        );
+      }
     } else {
       runtime.regions = await loadRegions(runtime.regionFilter);
       runtime.warehouses = await loadWarehouses(runtime.regions);
+      console.log(
+        `[SCENARIO] Loaded ${runtime.regions.length} region(s) and ${runtime.warehouses.length} warehouse(s)`
+      );
     }
+    console.log(`[SCENARIO] ═══════════════════════════════════════════════`);
+
     runtime.startedAt = Date.now();
     runtime.tickIndex = 0;
     runtime.active = true;

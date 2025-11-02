@@ -71,19 +71,19 @@ services:
       ml:
         condition: service_started
 
-  client:
-    build:
-      context: ./client
-      args:
-        NEXT_PUBLIC_API_URL: http://server:3001
-    restart: unless-stopped
-    ports:
-      - '3000:3000'
-    environment:
-      NEXT_PUBLIC_API_URL: http://server:3001
-    depends_on:
-      server:
-        condition: service_started
+  # client:
+  #   build:
+  #     context: ./client
+  #     args:
+  #       NEXT_PUBLIC_API_URL: http://server:3001
+  #   restart: unless-stopped
+  #   ports:
+  #     - '3000:3000'
+  #   environment:
+  #     NEXT_PUBLIC_API_URL: http://server:3001
+  #   depends_on:
+  #     server:
+  #       condition: service_started
 
 volumes:
   mongo_data:

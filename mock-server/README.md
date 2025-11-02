@@ -150,16 +150,42 @@ The mock-server implements a three-stage request lifecycle:
 
 ## Debugging
 
-The service logs all API calls:
+The service provides comprehensive logging for all operations. See **[LOGGING.md](./LOGGING.md)** for detailed log interpretation.
+
+Key log patterns:
 
 ```
+[SCENARIO] ═══════════════════════════════════════════════
+[SCENARIO] Starting scenario: HarvestRun-1
+[SCENARIO] Probabilities: farm=65%, request=35%
+[SCENARIO] ═══════════════════════════════════════════════
+
+[SCENARIO] Tick 0: Generating 20 new event(s)
+[SCENARIO]   Event 1/20: roll=0.234 (farm<0.650, request<1.000)
+[SCENARIO]   └─ Generating farm event
+[SCENARIO]   Event 2/20: roll=0.789
+[SCENARIO]   └─ Generating request event
+[SCENARIO] Creating request event: REQ-A3F2D8... (requester: 5b4a2c1d...)
+[SCENARIO]   └─ Will approve in 3 days (at 2025-11-04T12:00:00.000Z)
+
 [SCENARIO] POST http://localhost:3001/api/v1/request/createRequest (type: request)
 [SCENARIO] ✓ request succeeded (201)
 [SCENARIO] Captured mongoId 673abc... for requestId REQ-...
-[SCENARIO] Creating approval event for REQ-... (mongoId: 673abc...)
+
+[SCENARIO] Checking 3 pending approval(s) at 2025-11-04T12:00:00.000Z
+[SCENARIO]   ✓ Approval ready for REQ-A3F2D8...
 [SCENARIO] PATCH http://localhost:3001/api/v1/request/673abc.../status (type: requestApproved)
 [SCENARIO] ✓ requestApproved succeeded (200)
+
+[SCENARIO] Tick 0 complete: 21 total event(s) - farm:15, request:5, requestApproved:1
 ```
+
+**Quick diagnostics:**
+
+- ✓ = success, ✗ = failure
+- Event roll determines type (farm vs request)
+- Lifecycle events use simulated time (60-1440 min advances per event)
+- mongoId capture required for approval/fulfillment
 
 ## Testing
 
