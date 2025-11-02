@@ -7,9 +7,23 @@ import { Request } from "../models/request.model.js";
 import { Batch } from "../models/batch.model.js";
 import { Shipment } from "../models/shipment.model.js"; // assuming you have this model
 
+function resolveBaseUrl(raw, fallback) {
+  const candidate = (raw && String(raw).trim()) || fallback;
+  if (!candidate) {
+    return fallback;
+  }
+  if (/^https?:\/\//i.test(candidate)) {
+    return candidate;
+  }
+  return `http://${candidate}`;
+}
+
 const sendSimulationData = asyncHandler(async (req, res) => {
   try {
-    const baseURL = process.env.SIMULATION_BASE_URL || "http://localhost:5050";
+    const baseURL = resolveBaseUrl(
+      process.env.SIMULATION_BASE_URL,
+      "http://localhost:5050"
+    );
     if (!baseURL) {
       throw new ApiError(400, "Missing 'baseURL'. Please provide the target endpoint base URL.");
     }
@@ -106,9 +120,79 @@ const sendSimulationData = asyncHandler(async (req, res) => {
   }
 });
 
-const getData=asyncHandler(async (req, res) => {
-    const data=fetch("{baseURl}/transfers/plan");
-    console.log(data);
-})
+const getData = asyncHandler(async (req, res) => {
+  const baseURL = resolveBaseUrl(
+    process.env.SIMULATION_BASE_URL,
+    "http://localhost:5050"
+  );
+  const endpoint = `${baseURL}/transfers/plan`;
+
+  // Optional tuning parameters can be passed via body
+  const {
+    mode,
+    maxPairs,
+    minTransferKg,
+    overstockRatio,
+    understockRatio,
+    targetRatio,
+    intervalKm,
+    filters,
+  } = req.body || {};
+
+  // Load current graph state from DB
+  const [nodes, batches] = await Promise.all([
+    Node.find(),
+    Batch.find(),
+  ]);
+
+  // Shape nodes for ML transfer planner
+  const formattedNodes = nodes.map((node) => ({
+    _id: node._id.toString(),
+    nodeId: node._id.toString(),
+    type: node.type,
+    name: node.name,
+    state: null, // optional, not present in Node schema
+    district: node.district || null,
+    regionId: node.regionId || null,
+    capacity_kg: typeof node.capacity_kg === 'number' ? node.capacity_kg : 0,
+    location: node.location, // { type: 'Point', coordinates: [lon, lat] }
+  }));
+
+  // Shape batches; prefer currentNode/current_quantity_kg when present
+  const formattedBatches = batches.map((b) => ({
+    batchId: b._id.toString(),
+    originNode: b.originNode ? b.originNode.toString() : null,
+    currentNode: b.currentNode ? b.currentNode.toString() : (b.originNode ? b.originNode.toString() : null),
+    status: b.status || 'stored',
+    current_quantity_kg: typeof b.quantity_kg === 'number' ? b.quantity_kg : (typeof b.original_quantity_kg === 'number' ? b.original_quantity_kg : 0),
+    quantity_kg: typeof b.quantity_kg === 'number' ? b.quantity_kg : undefined,
+    original_quantity_kg: typeof b.original_quantity_kg === 'number' ? b.original_quantity_kg : undefined,
+    manufacture_date: b.manufacture_date || null,
+    expiry_iso: b.expiry_iso || null,
+    freshnessPct: typeof b.freshnessPct === 'number' ? b.freshnessPct : undefined,
+  }));
+
+  const payload = {
+    mode,
+    maxPairs,
+    minTransferKg,
+    overstockRatio,
+    understockRatio,
+    targetRatio,
+    intervalKm,
+    filters: filters || {},
+    nodes: formattedNodes,
+    batches: formattedBatches,
+  };
+
+  const response = await axios.post(endpoint, payload, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 15000,
+  });
+
+  return res.status(200).json(
+    new ApiResponse(200, response.data, 'Transfer plan generated successfully.')
+  );
+});
 
 export { sendSimulationData , getData};

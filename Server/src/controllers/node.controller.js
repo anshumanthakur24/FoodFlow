@@ -305,11 +305,11 @@ const startScenario = asyncHandler(async (req, res) => {
       name: ngo.name,
       address: ngo.address,
       contact: ngo.contactInfo || {},
-      requestStats: ngo.requestStats
+      requestStats: ngo.requestStats,
     }));
 
     const payload = {
-      name: "HarvestRun-1",
+      name: "HarvestRun-2",
       seed: "arcanix-2025",
       startDate: "2025-11-01T00:00:00Z",
       batchSize: 20,
