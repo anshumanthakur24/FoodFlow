@@ -21,8 +21,8 @@ MONGO_URI=mongodb://127.0.0.1:27017/arcanix
 MAIN_API_URL=http://localhost:3001
 MAIN_API_FARM_PATH=/api/v1/event/farm
 MAIN_API_REQUEST_CREATE_PATH=/api/v1/request/createRequest
-MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestId}/approved
-MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestId}/fulfilled
+MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestObjectId}/status
+MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestObjectId}/status
 SCENARIO_MAX_BATCH_SIZE=200
 SCENARIO_MIN_INTERVAL_MS=500
 SCENARIO_PROB_FARM=0.65
@@ -31,14 +31,7 @@ SCENARIO_PROB_REQUEST=0.35
 
 Any unset value falls back to the defaults above.
 
-Tip: If your main API only exposes a single status endpoint (e.g. `PATCH /api/v1/request/:requestID/status`), set the approve/fulfill templates to point at that path and use the Mongo object id placeholder:
-
-```
-MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestObjectId}/status
-MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestObjectId}/status
-```
-
-The mock server will capture the created request's Mongo `_id` from the creation response and substitute it into `{requestObjectId}` automatically.
+If your main API exposes separate approve/fulfil endpoints, you can override the templates accordingly. The mock server captures the created request's Mongo `_id` from the creation response and substitutes it into `{requestObjectId}` automatically.
 
 ## Request Lifecycle
 
