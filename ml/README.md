@@ -66,7 +66,6 @@ POST /predict – choose one of the two request formats below. If `runId` is omi
   ],
   "requests": [
     {
-      "requestId": "R1",
       "requesterNode": "NGO-001",
       "items": [{ "foodType": "cereals", "required_kg": 500 }],
       "requiredBy_iso": "2024-10-10",
@@ -76,7 +75,7 @@ POST /predict – choose one of the two request formats below. If `runId` is omi
   "shipments": [
     {
       "shipmentId": "S1",
-      "batchIds": ["B1"],
+      "batchIds": [],
       "fromNode": "FARM-001",
       "toNode": "WH-001",
       "start_iso": "2024-10-05",
@@ -85,7 +84,6 @@ POST /predict – choose one of the two request formats below. If `runId` is omi
   ],
   "batches": [
     {
-      "batchId": "B1",
       "originNode": "FARM-001",
       "quantity_kg": 1200,
       "manufacture_date": "2024-10-01"

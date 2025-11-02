@@ -2,6 +2,8 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Node } from "../models/node.model.js";
+import { NGO } from "../models/NGO.model.js";
+import axios from "axios";
 
 const createNode = asyncHandler(async (req, res) => {
   try {
@@ -264,7 +266,8 @@ const getAllDistricts = asyncHandler(async (req, res) => {
 
 const startScenario = asyncHandler(async (req, res) => {
   try {
-    const baseURL = process.env.SCENARIO_BASE_URL || req.body.baseURL;
+    const baseURL =
+      process.env.SCENARIO_BASE_URL || "http://localhost:5001/api";
     if (!baseURL) {
       throw new ApiError(
         400,
@@ -281,19 +284,23 @@ const startScenario = asyncHandler(async (req, res) => {
 
     const ngos = await NGO.find();
     if (ngos.length === 0) {
-      console.warn("⚠️ No NGOs found in the database — continuing without NGOs.");
+      console.warn(
+        "⚠️ No NGOs found in the database — continuing without NGOs."
+      );
     }
-
+    console.log(nodes[0]);
     const formattedNodes = nodes.map((node, index) => ({
       nodeId: node._id.toString(),
       name: node.name,
       type: node.type,
       district: node.district,
       regionId: node.regionId || "Unknown",
+      regionId: node.regionId || "Unknown",
       location: node.location,
     }));
 
     const formattedNGOs = ngos.map((ngo, index) => ({
+      ngoId: ngo._id.toString(),
       ngoId: ngo._id.toString(),
       name: ngo.name,
       address: ngo.address,
@@ -308,7 +315,7 @@ const startScenario = asyncHandler(async (req, res) => {
       batchSize: 20,
       intervalMs: 2000,
       nodes: formattedNodes,
-      ngos: formattedNGOs, 
+      ngos: formattedNGOs,
       durationMinutes: 5,
       probabilities: { farm: 0.7, shipment: 0.25, ngo: 0.05 },
     };
@@ -317,7 +324,6 @@ const startScenario = asyncHandler(async (req, res) => {
       headers: { "Content-Type": "application/json" },
       timeout: 10000,
     });
-
 
     return res.status(200).json(
       new ApiResponse(
@@ -332,11 +338,12 @@ const startScenario = asyncHandler(async (req, res) => {
       )
     );
   } catch (error) {
+    console.log(error);
     if (error.response) {
       throw new ApiError(
         error.response.status,
         "External API error during scenario start.",
-        [error.response.data]
+        [error.data]
       );
     } else if (error.request) {
       throw new ApiError(
@@ -356,5 +363,11 @@ const startScenario = asyncHandler(async (req, res) => {
   }
 });
 
-
-export { createNode, deleteNode, getNodesByRegion, getAllNodes,getAllDistricts,startScenario };
+export {
+  createNode,
+  deleteNode,
+  getNodesByRegion,
+  getAllNodes,
+  getAllDistricts,
+  startScenario,
+};

@@ -9,6 +9,10 @@ const ScenarioSchema = new mongoose.Schema(
       batchSize: { type: Number, required: true },
       intervalMs: { type: Number, required: true },
       regionFilter: [{ type: String }],
+      timeAdvance: {
+        minMinutes: { type: Number, default: 60 },
+        maxMinutes: { type: Number, default: 1440 },
+      },
     },
     probabilities: {
       farm: { type: Number, default: 0.7 },

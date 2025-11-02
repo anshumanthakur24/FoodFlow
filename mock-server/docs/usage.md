@@ -18,18 +18,44 @@ Create a `.env` file in `mock-server/` with environment overrides as needed:
 ```
 PORT=5001
 MONGO_URI=mongodb://127.0.0.1:27017/arcanix
-MAIN_API_URL=http://localhost:4000
-MAIN_API_FARM_PATH=/api/farm-events
-MAIN_API_SHIPMENTS_PATH=/api/shipments
-MAIN_API_REQUESTS_PATH=/api/requests
+MAIN_API_URL=http://localhost:3001
+MAIN_API_FARM_PATH=/api/v1/event/farm
+MAIN_API_REQUEST_CREATE_PATH=/api/v1/request/createRequest
+MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestId}/approved
+MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestId}/fulfilled
 SCENARIO_MAX_BATCH_SIZE=200
 SCENARIO_MIN_INTERVAL_MS=500
-SCENARIO_PROB_FARM=0.7
-SCENARIO_PROB_SHIPMENT=0.25
-SCENARIO_PROB_NGO=0.05
+SCENARIO_PROB_FARM=0.65
+SCENARIO_PROB_REQUEST=0.35
 ```
 
 Any unset value falls back to the defaults above.
+
+Tip: If your main API only exposes a single status endpoint (e.g. `PATCH /api/v1/request/:requestID/status`), set the approve/fulfill templates to point at that path and use the Mongo object id placeholder:
+
+```
+MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestObjectId}/status
+MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestObjectId}/status
+```
+
+The mock server will capture the created request's Mongo `_id` from the creation response and substitute it into `{requestObjectId}` automatically.
+
+## Request Lifecycle
+
+Request creation events follow the main API schema. Each `request` payload includes `requestId`, `requesterNode`, `items`, and lifecycle history. The simulator then:
+
+- POSTs to `MAIN_API_REQUEST_CREATE_PATH` when a request is created.
+- After a random 1–6 day delay, POSTs to `MAIN_API_REQUEST_APPROVE_TEMPLATE` to mark the request as approved. Templates support `{requestId}` (the human ID) and `{requestObjectId}` (Mongo `_id`).
+- For the majority of approved requests, POSTs to `MAIN_API_REQUEST_FULFILL_TEMPLATE` after an additional 4–48 simulation hours to mark them fulfilled.
+
+Requests that are never approved remain tracked internally with `pending` status so the mock server can surface their history via the events collection.
+Request identifiers are deterministically derived from the scenario seed so that approval and fulfilment calls always reference the same value sent during creation.
+The simulator persists three event types in Mongo for this lifecycle: `request` (creation), `requestApproved`, and `requestFulfilled`.
+
+All lifecycle calls use `POST` with JSON bodies. For status-only endpoints, the payloads are:
+
+- Approval: `{ "status": "approved", "approvedOn": "<ISO>" }`
+- Fulfillment: `{ "status": "fulfilled", "fulfilledBy": "<ObjectId>", "fullFilledOn": "<ISO>", "approvedOn": "<ISO>" }`
 
 ## API Endpoints
 
@@ -65,7 +91,7 @@ There are two ways to scope where events are emitted from:
     }
   ],
   "durationMinutes": 5,
-  "probabilities": { "farm": 0.7, "shipment": 0.25, "ngo": 0.05 }
+  "probabilities": { "farm": 0.65, "request": 0.35 }
 }
 ```
 
@@ -93,7 +119,7 @@ Retrieve scenario metadata, status, configuration, and stats.
 
 Fetch recent events persisted in MongoDB (`sim_events`). `limit` defaults to 100 and is capped at 500.
 
-All emitted events now include an `emittedFrom` object inside the payload with the source node details:
+All emitted events now include an `emittedFrom` object inside the payload with the source node details, plus simulated time fields that advance between events:
 
 ```json
 {
@@ -106,11 +132,41 @@ All emitted events now include an `emittedFrom` object inside the payload with t
       "state": "Maharashtra",
       "location": { "lat": 18.52, "lon": 73.86 }
     },
-    "batch": { "batchId": "...", "quantity_kg": 2500 },
-    "quantity_kg": 2500
+    "quantity_kg": 2500,
+    "generatedAt": "2025-11-01T00:05:00.000Z",
+    "generatedAt_iso": "2025-11-01T00:05:00.000Z",
+    "createdAt": "2025-11-01T00:05:00.000Z",
+    "createdAt_iso": "2025-11-01T00:05:00.000Z",
+    "previousEvent": "2025-11-01T00:00:00.000Z",
+    "previousEvent_iso": "2025-11-01T00:00:00.000Z",
+    "batch": {
+      "quantity_kg": 2500,
+      "dateOfCreation": "2025-11-01T00:05:00.000Z",
+      "dateOfCreation_iso": "2025-11-01T00:05:00.000Z"
+    }
   }
 }
 ```
+
+Request creation events follow the request schema published by the main API. Each `request` payload includes `requestId`, `requesterNode`, `items`, and lifecycle history. The simulator emits `requestApproved` after a random delay (1–6 days) and `requestFulfilled` 4–48 hours after approval for most requests. Requests that are never approved remain in the simulator ledger and stay in `pending` status.
+
+### Simulated time configuration
+
+You can configure how much simulated time advances between events when starting a scenario:
+
+```json
+{
+  "name": "HarvestRun-1",
+  "seed": "arcanix-2025",
+  "startDate": "2025-11-01T00:00:00Z",
+  "batchSize": 20,
+  "intervalMs": 2000,
+  "timeAdvance": { "minMinutes": 60, "maxMinutes": 1440 },
+  "nodes": [...]
+}
+```
+
+Defaults are 60–1440 minutes if omitted. The simulated clock is monotonic and embedded in the event payload via the `generatedAt`/`createdAt` fields.
 
 ## Docker
 
