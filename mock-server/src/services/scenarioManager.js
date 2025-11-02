@@ -1,5 +1,6 @@
 const { createHash } = require('crypto');
 const seedrandom = require('seedrandom');
+const axios = require('axios');
 const Scenario = require('../models/Scenario');
 const SimEvent = require('../models/SimEvent');
 const CropSeason = require('../models/CropSeason');
@@ -17,11 +18,6 @@ const {
 
 const activeScenarios = new Map();
 
-const fetchApi = (...args) => {
-  if (typeof fetch === 'function') return fetch(...args);
-  return Promise.reject(new Error('fetch unavailable'));
-};
-
 function normalizeBatchSize(value) {
   if (!value || Number.isNaN(Number(value)))
     return Math.min(50, MAX_BATCH_SIZE);
@@ -38,12 +34,26 @@ function normalizeInterval(value) {
 
 function normalizeProbabilities(input) {
   const source = { ...DEFAULT_PROBABILITIES, ...(input || {}) };
-  const farm = Number(source.farm) || 0;
+  const MIN_PROBABILITY = 0.01; // Ensure at least 1% for each type
+
+  let farm = Math.max(0, Number(source.farm) || 0);
   const requestAlias =
     source.request ?? source.ngo ?? source.requests ?? source.aid ?? 0;
-  const request = Number(requestAlias) || 0;
+  let request = Math.max(0, Number(requestAlias) || 0);
+
+  // If both are zero or negative, use defaults
+  if (farm <= 0 && request <= 0) {
+    return { ...DEFAULT_PROBABILITIES };
+  }
+
+  // Ensure minimum values if one is provided
+  if (farm > 0 && request <= 0) {
+    request = MIN_PROBABILITY;
+  } else if (request > 0 && farm <= 0) {
+    farm = MIN_PROBABILITY;
+  }
+
   const total = farm + request;
-  if (!total || total <= 0) return { ...DEFAULT_PROBABILITIES };
   return {
     farm: farm / total,
     request: request / total,
@@ -822,7 +832,18 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
     MAIN_API_ROUTES.requestApproveTemplate,
     ledgerEntry
   );
-  if (!urlPath) return null;
+  if (!urlPath) {
+    console.warn(
+      `[SCENARIO] Failed to build approval URL for requestId ${ledgerEntry.requestId}`
+    );
+    return null;
+  }
+
+  console.log(
+    `[SCENARIO] Creating approval event for ${
+      ledgerEntry.requestId
+    } (mongoId: ${ledgerEntry.mongoId || 'unknown'})`
+  );
 
   const recordPayload = {
     requestId: ledgerEntry.requestId,
@@ -899,7 +920,18 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     MAIN_API_ROUTES.requestFulfillTemplate,
     ledgerEntry
   );
-  if (!urlPath) return null;
+  if (!urlPath) {
+    console.warn(
+      `[SCENARIO] Failed to build fulfillment URL for requestId ${ledgerEntry.requestId}`
+    );
+    return null;
+  }
+
+  console.log(
+    `[SCENARIO] Creating fulfillment event for ${
+      ledgerEntry.requestId
+    } (mongoId: ${ledgerEntry.mongoId || 'unknown'})`
+  );
 
   const recordPayload = {
     requestId: ledgerEntry.requestId,
@@ -1181,29 +1213,55 @@ async function postJson(url, body, method = 'POST') {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAIN_API_TIMEOUT_MS);
   try {
-    const response = await fetchApi(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    let data = null;
-    try {
-      data = await response.clone().json();
-    } catch (_) {
+    if (typeof fetch === 'function') {
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      let data = null;
       try {
-        data = await response.text();
+        data = await response.clone().json();
       } catch (_) {
-        data = null;
+        try {
+          data = await response.text();
+        } catch (_) {
+          data = null;
+        }
       }
+      if (!response.ok) {
+        console.error('Main API error', response.status, data || '');
+      }
+      return { ok: response.ok, status: response.status, data };
     }
-    if (!response.ok) {
-      console.error('Main API error', response.status, data || '');
+
+    const response = await axios({
+      url,
+      method,
+      data: body,
+      headers: { 'Content-Type': 'application/json' },
+      timeout: MAIN_API_TIMEOUT_MS,
+      signal: controller.signal,
+      validateStatus: () => true,
+    });
+
+    const ok = response.status >= 200 && response.status < 300;
+    if (!ok) {
+      console.error('Main API error', response.status, response.data || '');
     }
-    return { ok: response.ok, status: response.status, data };
+    return { ok, status: response.status, data: response.data };
   } catch (err) {
-    console.error('Main API error', err.message);
-    return { ok: false, status: 0, data: null };
+    const status =
+      err.response && err.response.status ? err.response.status : 0;
+    const data = err.response && err.response.data ? err.response.data : null;
+    const aborted =
+      err.name === 'AbortError' ||
+      err.code === 'ABORT_ERR' ||
+      err.code === 'ERR_CANCELED';
+    const message = aborted ? 'Request aborted' : err.message;
+    console.error('Main API error', message, status || '');
+    return { ok: false, status, data };
   } finally {
     clearTimeout(timeout);
   }
@@ -1213,20 +1271,27 @@ async function dispatchEvents(events, runtime) {
   if (!events.length) return;
   for (const event of events) {
     const method = event.apiRequest.method || 'POST';
+    console.log(
+      `[SCENARIO] ${method} ${event.apiRequest.url} (type: ${event.type})`
+    );
     const res = await postJson(
       event.apiRequest.url,
       event.apiRequest.body,
       method
     );
+    if (res.ok) {
+      console.log(`[SCENARIO] ✓ ${event.type} succeeded (${res.status})`);
+    } else {
+      console.error(
+        `[SCENARIO] ✗ ${event.type} failed (${res.status}):`,
+        res.data || ''
+      );
+    }
     if (event.type === 'request' && res && res.ok) {
       try {
         const body = res.data;
-        // Try to extract the created Mongo _id from common API response shapes
         const created =
-          (body && body.data) || // ApiResponse style
-          (body && body.request) ||
-          body ||
-          null;
+          (body && body.data) || (body && body.request) || body || null;
         const mongoId =
           (created && created._id) ||
           (created && created.data && created.data._id) ||
@@ -1235,10 +1300,24 @@ async function dispatchEvents(events, runtime) {
           event.apiRequest.body && event.apiRequest.body.requestId;
         if (mongoId && requestId && runtime && runtime.requestLedger) {
           const entry = runtime.requestLedger.get(requestId);
-          if (entry) entry.mongoId = String(mongoId);
+          if (entry) {
+            entry.mongoId = String(mongoId);
+            console.log(
+              `[SCENARIO] Captured mongoId ${mongoId} for requestId ${requestId}`
+            );
+          }
+        } else if (requestId) {
+          console.warn(
+            `[SCENARIO] Failed to capture mongoId for requestId ${requestId}:`,
+            {
+              mongoId,
+              hasRuntime: !!runtime,
+              hasLedger: !!runtime?.requestLedger,
+            }
+          );
         }
-      } catch (_) {
-        // ignore mapping errors
+      } catch (err) {
+        console.error('[SCENARIO] Error capturing mongoId:', err.message);
       }
     }
   }
