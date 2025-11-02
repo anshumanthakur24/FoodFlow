@@ -35,20 +35,31 @@ If your main API exposes separate approve/fulfil endpoints, you can override the
 
 ## Request Lifecycle
 
-Request creation events follow the main API schema. Each `request` payload includes `requestId`, `requesterNode`, `items`, and lifecycle history. The simulator then:
+The mock-server sends request lifecycle events to a **unified status endpoint** on the main API. All three lifecycle stages use the same route with different payloads:
 
-- POSTs to `MAIN_API_REQUEST_CREATE_PATH` when a request is created.
-- After a random 1–6 day delay, POSTs to `MAIN_API_REQUEST_APPROVE_TEMPLATE` to mark the request as approved. Templates support `{requestId}` (the human ID) and `{requestObjectId}` (Mongo `_id`).
-- For the majority of approved requests, POSTs to `MAIN_API_REQUEST_FULFILL_TEMPLATE` after an additional 4–48 simulation hours to mark them fulfilled.
+1. **Creation** → `POST /api/v1/request/createRequest`
+
+   - Payload: `{ requestId, requesterNode, items, createdOn, requiredBefore, status: "pending" }`
+   - Response captures the Mongo `_id` for later lifecycle calls
+
+2. **Approval** → `PATCH /api/v1/request/:requestID/status` (after 1–6 simulated days)
+
+   - Payload: `{ status: "approved", approvedOn: ISO_STRING }`
+   - Uses the captured `_id` from creation response
+
+3. **Fulfillment** → `PATCH /api/v1/request/:requestID/status` (4–48 simulated hours after approval)
+   - Payload: `{ status: "fulfilled", fulfilledBy: ObjectId, fullFilledOn: ISO_STRING, approvedOn: ISO_STRING }`
+   - Only sent for ~70% of approved requests
+
+The simulator:
+
+- Deterministically generates `requestId` values from the scenario seed
+- Captures the Mongo `_id` from the creation response (`body.data._id`)
+- Substitutes `{requestObjectId}` placeholder in templates with the captured `_id`
+- Auto-detects `/status` in URLs and switches to `PATCH` method
+- Persists all three event types in MongoDB: `request`, `requestApproved`, `requestFulfilled`
 
 Requests that are never approved remain tracked internally with `pending` status so the mock server can surface their history via the events collection.
-Request identifiers are deterministically derived from the scenario seed so that approval and fulfilment calls always reference the same value sent during creation.
-The simulator persists three event types in Mongo for this lifecycle: `request` (creation), `requestApproved`, and `requestFulfilled`.
-
-All lifecycle calls use `POST` with JSON bodies. For status-only endpoints, the payloads are:
-
-- Approval: `{ "status": "approved", "approvedOn": "<ISO>" }`
-- Fulfillment: `{ "status": "fulfilled", "fulfilledBy": "<ObjectId>", "fullFilledOn": "<ISO>", "approvedOn": "<ISO>" }`
 
 ## API Endpoints
 
