@@ -19,17 +19,19 @@ import {startScenario} from "./controllers/node.controller.js"
 app.use(logger);
 
 
-app.use("/api/v1/startMock",startScenario);
+app.post("/api/v1/startMock",startScenario);
 // Routes Import
 import eventRouter from "./routes/event.route.js";
 import mapRouter from "./routes/map.routes.js";
 import nodeRouter from "./routes/node.route.js"
 import requestRouter from "./routes/ngo.route.js"
+import mlRouter from "./routes/model.route.js"
 
 // Routes Declaration
 app.use("/api/v1/event/",eventRouter);  //for recieving the data from the dummy server
 app.use("/api/v1/map",mapRouter);
 app.use("/api/v1/node",nodeRouter);
 app.use("/api/v1/request",requestRouter);
+app.use("/api/ml",mlRouter);
 
 export { app };
