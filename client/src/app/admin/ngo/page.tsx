@@ -1,6 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import {
+  adminService,
+  type GoodsRequest as ApiGoodsRequest,
+  type NGO as ApiNGO,
+} from "@/services/admin.service";
 
 interface NGO {
   id: string;
@@ -20,17 +25,38 @@ interface NGO {
 }
 
 interface GoodsRequest {
-  id: string;
-  ngoId: string;
-  ngoName: string;
-  itemType: string;
-  quantity: number;
-  unit: string;
-  urgency: "low" | "medium" | "high" | "critical";
-  requestDate: string;
-  requiredBy: string;
-  description: string;
-  status: "pending" | "approved" | "rejected";
+  _id?: string;
+  id?: string;
+  ngoId?: string;
+  ngoName?: string;
+  requesterNode?:
+    | string
+    | {
+        _id: string;
+        name: string;
+        contactInfo?: any;
+      };
+  requestId?: string;
+  requestID?: string;
+  itemType?: string;
+  items?: {
+    foodType: string;
+    required_kg: number;
+  }[];
+  quantity?: number;
+  unit?: string;
+  urgency?: "low" | "medium" | "high" | "critical";
+  requestDate?: string;
+  requiredBy?: string;
+  requiredBy_iso?: string;
+  requiredBefore?: string; // Backend field name
+  createdOn?: string; // Backend field name
+  description?: string;
+  status: "pending" | "approved" | "fulfilled" | "cancelled";
+  createdAt?: string;
+  updatedAt?: string;
+  approvedOn?: string | null;
+  fullFilledOn?: string | null;
 }
 
 // Mock data for NGOs
@@ -159,10 +185,10 @@ const MOCK_GOODS_REQUESTS: GoodsRequest[] = [
 ];
 
 export default function NGODashboard() {
-  const [ngos] = useState<NGO[]>(MOCK_NGOS);
-  const [selectedNGO, setSelectedNGO] = useState<NGO | null>(null);
-  const [incomingRequests, setIncomingRequests] =
-    useState<GoodsRequest[]>(MOCK_GOODS_REQUESTS);
+  const [ngos, setNgos] = useState<ApiNGO[]>([]);
+  const [selectedNGO, setSelectedNGO] = useState<ApiNGO | null>(null);
+  const [ngoRequests, setNgoRequests] = useState<GoodsRequest[]>([]);
+  const [incomingRequests, setIncomingRequests] = useState<GoodsRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<GoodsRequest | null>(
     null
   );
@@ -171,6 +197,57 @@ export default function NGODashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch NGOs from database
+  useEffect(() => {
+    fetchNGOs();
+  }, []);
+
+  // Fetch all requests on component mount
+  useEffect(() => {
+    fetchAllRequests();
+  }, []);
+
+  const fetchNGOs = async () => {
+    try {
+      const ngoList = await adminService.getAllNGOs();
+      setNgos(ngoList);
+    } catch (err) {
+      console.error("Error fetching NGOs:", err);
+    }
+  };
+
+  const fetchAllRequests = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      // Only fetch PENDING requests for the notification/incoming requests
+      const requests = await adminService.getAllRequests(1, 100, "pending");
+      console.log("Raw API response:", requests);
+      console.log("First request structure:", requests[0]);
+      console.log("First request ID (_id):", requests[0]?._id);
+      console.log("First request ID (id):", requests[0]?.id);
+      setIncomingRequests(requests);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch requests");
+      console.error("Error fetching requests:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchNGORequests = async (ngoId: string) => {
+    try {
+      const requests = await adminService.getRequestsByNGO(ngoId);
+      console.log("NGO-specific requests:", requests);
+      setNgoRequests(requests);
+    } catch (err) {
+      console.error("Error fetching NGO requests:", err);
+      setNgoRequests([]);
+    }
+  };
 
   // Form state for new NGO
   const [newNGO, setNewNGO] = useState({
@@ -188,18 +265,22 @@ export default function NGODashboard() {
   const filteredNGOs = ngos.filter((ngo) => {
     const matchesSearch =
       ngo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ngo.district.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ngo.registrationNumber.toLowerCase().includes(searchQuery.toLowerCase());
+      ngo.address.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ngo.contactInfo.contactPerson &&
+        ngo.contactInfo.contactPerson
+          .toLowerCase()
+          .includes(searchQuery.toLowerCase()));
 
-    const matchesStatus = statusFilter === "all" || ngo.status === statusFilter;
+    // Since database NGO doesn't have status field, consider all as active
+    const matchesStatus = statusFilter === "all" || statusFilter === "active";
 
     return matchesSearch && matchesStatus;
   });
 
   // Calculate statistics
   const totalNGOs = ngos.length;
-  const activeNGOs = ngos.filter((ngo) => ngo.status === "active").length;
-  const pendingNGOs = ngos.filter((ngo) => ngo.status === "pending").length;
+  const activeNGOs = ngos.length; // All NGOs are active since no status field
+  const pendingNGOs = 0; // No pending status in database
   const incomingRequestsCount = incomingRequests.length;
 
   const handleAddNGO = (e: React.FormEvent) => {
@@ -219,38 +300,151 @@ export default function NGODashboard() {
     });
   };
 
-  const handleAcceptRequest = (requestId: string) => {
-    const request = incomingRequests.find((req) => req.id === requestId);
-    if (request) {
-      // Update request status to approved
-      setIncomingRequests(
-        incomingRequests.map((req) =>
-          req.id === requestId ? { ...req, status: "approved" as const } : req
-        )
+  const handleAcceptRequest = async (requestId?: string) => {
+    if (!requestId) {
+      console.error("No request ID provided");
+      return;
+    }
+
+    console.log("Attempting to approve request with ID:", requestId);
+    setIsLoading(true);
+    setError(null);
+    try {
+      const requestToUpdate = incomingRequests.find(
+        (req) => (req._id || req.id) === requestId
       );
+      if (!requestToUpdate) {
+        console.error("Request not found in local state:", requestId);
+        return;
+      }
+
+      console.log("Request to update:", requestToUpdate);
+      console.log("Calling API to approve request...");
+
+      // Call API to approve request
+      const updatedRequest = await adminService.updateRequestStatus(
+        requestId,
+        "approved"
+      );
+
+      console.log("API response:", updatedRequest);
+
+      // Remove the approved request from incoming requests list
+      setIncomingRequests(
+        incomingRequests.filter((req) => (req._id || req.id) !== requestId)
+      );
+
       // Close modals
       setIsRequestsModalOpen(false);
       setSelectedRequest(null);
-      // In a real app, this would call an API to approve the request
-      console.log("Approved request:", request);
+
+      console.log("Successfully approved request:", requestToUpdate);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to approve request";
+      setError(errorMessage);
+      console.error("Error approving request:", err);
+      alert("Error: " + errorMessage); // Show alert for debugging
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleRejectRequest = (requestId: string) => {
-    const request = incomingRequests.find((req) => req.id === requestId);
-    if (request) {
-      // Update request status to rejected
-      setIncomingRequests(
-        incomingRequests.map((req) =>
-          req.id === requestId ? { ...req, status: "rejected" as const } : req
-        )
+  const handleRejectRequest = async (requestId?: string) => {
+    if (!requestId) {
+      console.error("No request ID provided");
+      return;
+    }
+
+    console.log("Attempting to reject request with ID:", requestId);
+    setIsLoading(true);
+    setError(null);
+    try {
+      const requestToUpdate = incomingRequests.find(
+        (req) => (req._id || req.id) === requestId
       );
+      if (!requestToUpdate) {
+        console.error("Request not found in local state:", requestId);
+        return;
+      }
+
+      console.log("Request to update:", requestToUpdate);
+      console.log("Calling API to reject request...");
+
+      // Call API to reject request - use 'cancelled' status instead of 'rejected'
+      const updatedRequest = await adminService.updateRequestStatus(
+        requestId,
+        "cancelled"
+      );
+
+      console.log("API response:", updatedRequest);
+
+      // Remove the cancelled request from incoming requests list
+      setIncomingRequests(
+        incomingRequests.filter((req) => (req._id || req.id) !== requestId)
+      );
+
       // Close modals
       setIsRequestsModalOpen(false);
       setSelectedRequest(null);
-      // In a real app, this would call an API to reject the request
-      console.log("Rejected request:", request);
+
+      console.log("Successfully rejected request:", requestToUpdate);
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to reject request";
+      setError(errorMessage);
+      console.error("Error rejecting request:", err);
+      alert("Error: " + errorMessage); // Show alert for debugging
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  // Helper functions to handle different data formats
+  const getRequestId = (request: GoodsRequest) => {
+    return request._id || request.id || "";
+  };
+
+  const getNGOName = (request: GoodsRequest) => {
+    if (request.ngoName) return request.ngoName;
+    if (
+      typeof request.requesterNode === "object" &&
+      request.requesterNode?.name
+    ) {
+      return request.requesterNode.name;
+    }
+    return "Unknown NGO";
+  };
+
+  const getItemType = (request: GoodsRequest) => {
+    if (request.itemType) return request.itemType;
+    if (request.items && request.items.length > 0) {
+      return request.items.map((i) => i.foodType).join(", ");
+    }
+    return "N/A";
+  };
+
+  const getQuantity = (request: GoodsRequest) => {
+    if (request.quantity) return `${request.quantity} ${request.unit || "kg"}`;
+    if (request.items && request.items.length > 0) {
+      const total = request.items.reduce((sum, i) => sum + i.required_kg, 0);
+      return `${total} kg`;
+    }
+    return "N/A";
+  };
+
+  const getRequestDate = (request: GoodsRequest) => {
+    if (request.requestDate) return request.requestDate;
+    if (request.createdAt)
+      return new Date(request.createdAt).toISOString().split("T")[0];
+    return new Date().toISOString().split("T")[0];
+  };
+
+  const getRequiredBy = (request: GoodsRequest) => {
+    if (request.requiredBy) return request.requiredBy;
+    if (request.requiredBy_iso)
+      return new Date(request.requiredBy_iso).toISOString().split("T")[0];
+    return "";
   };
 
   return (
@@ -549,8 +743,11 @@ export default function NGODashboard() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {filteredNGOs.map((ngo) => (
               <div
-                key={ngo.id}
-                onClick={() => setSelectedNGO(ngo)}
+                key={ngo._id}
+                onClick={() => {
+                  setSelectedNGO(ngo);
+                  fetchNGORequests(ngo._id);
+                }}
                 className="cursor-pointer rounded-lg border border-zinc-200 bg-white p-5 transition-all hover:shadow-lg dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-zinc-700"
               >
                 {/* NGO Header */}
@@ -560,19 +757,11 @@ export default function NGODashboard() {
                       {ngo.name}
                     </h3>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                      {ngo.registrationNumber}
+                      ID: {ngo._id}
                     </p>
                   </div>
-                  <span
-                    className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
-                      ngo.status === "active"
-                        ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
-                        : ngo.status === "pending"
-                          ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400"
-                          : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
-                    }`}
-                  >
-                    {ngo.status}
+                  <span className="inline-flex rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-400">
+                    active
                   </span>
                 </div>
 
@@ -597,9 +786,7 @@ export default function NGODashboard() {
                       d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
                     />
                   </svg>
-                  <span>
-                    {ngo.district}, {ngo.state}
-                  </span>
+                  <span>{ngo.address}</span>
                 </div>
 
                 {/* Stats */}
@@ -609,7 +796,7 @@ export default function NGODashboard() {
                       Total Requests
                     </p>
                     <p className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                      {ngo.totalRequests}
+                      {ngo.requestStats.total}
                     </p>
                   </div>
                   <div>
@@ -617,7 +804,7 @@ export default function NGODashboard() {
                       Fulfilled
                     </p>
                     <p className="text-lg font-semibold text-green-600 dark:text-green-400">
-                      {ngo.fulfilledRequests}
+                      {ngo.requestStats.completed}
                     </p>
                   </div>
                 </div>
@@ -628,7 +815,7 @@ export default function NGODashboard() {
                     Contact Person
                   </p>
                   <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    {ngo.contactPerson}
+                    {ngo.contactInfo.contactPerson}
                   </p>
                 </div>
               </div>
@@ -662,7 +849,7 @@ export default function NGODashboard() {
               <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                 {filteredNGOs.map((ngo) => (
                   <tr
-                    key={ngo.id}
+                    key={ngo._id}
                     className="transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800"
                   >
                     <td className="px-4 py-3">
@@ -670,35 +857,27 @@ export default function NGODashboard() {
                         {ngo.name}
                       </div>
                       <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                        {ngo.registrationNumber}
+                        ID: {ngo._id}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100">
-                      {ngo.district}, {ngo.state}
+                      {ngo.address}
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-sm text-zinc-900 dark:text-zinc-100">
-                        {ngo.contactPerson}
+                        {ngo.contactInfo.contactPerson}
                       </div>
                       <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                        {ngo.phone}
+                        {ngo.contactInfo.phone || "N/A"}
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
-                          ngo.status === "active"
-                            ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
-                            : ngo.status === "pending"
-                              ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400"
-                              : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
-                        }`}
-                      >
-                        {ngo.status}
+                      <span className="inline-flex rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-400">
+                        active
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-zinc-900 dark:text-zinc-100">
-                      {ngo.totalRequests}
+                      {ngo.requestStats.total}
                     </td>
                     <td className="px-4 py-3">
                       <button
@@ -754,7 +933,7 @@ export default function NGODashboard() {
                   {selectedNGO.name}
                 </h2>
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  {selectedNGO.registrationNumber}
+                  ID: {selectedNGO._id}
                 </p>
               </div>
               <button
@@ -781,16 +960,8 @@ export default function NGODashboard() {
             <div className="p-6">
               {/* Status Badge */}
               <div className="mb-6">
-                <span
-                  className={`inline-flex rounded-full px-3 py-1 text-sm font-medium ${
-                    selectedNGO.status === "active"
-                      ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
-                      : selectedNGO.status === "pending"
-                        ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400"
-                        : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
-                  }`}
-                >
-                  {selectedNGO.status.toUpperCase()}
+                <span className="inline-flex rounded-full px-3 py-1 text-sm font-medium bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400">
+                  ACTIVE
                 </span>
               </div>
 
@@ -801,15 +972,15 @@ export default function NGODashboard() {
                     Total Requests
                   </p>
                   <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100">
-                    {selectedNGO.totalRequests}
+                    {selectedNGO.requestStats.total}
                   </p>
                 </div>
                 <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                    Fulfilled
+                    Completed
                   </p>
                   <p className="mt-1 text-2xl font-semibold text-green-600 dark:text-green-400">
-                    {selectedNGO.fulfilledRequests}
+                    {selectedNGO.requestStats.completed}
                   </p>
                 </div>
                 <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
@@ -817,7 +988,15 @@ export default function NGODashboard() {
                     Pending
                   </p>
                   <p className="mt-1 text-2xl font-semibold text-orange-600 dark:text-orange-400">
-                    {selectedNGO.pendingRequests}
+                    {selectedNGO.requestStats.pending}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                    Approved
+                  </p>
+                  <p className="mt-1 text-2xl font-semibold text-blue-600 dark:text-blue-400">
+                    {selectedNGO.requestStats.approved}
                   </p>
                 </div>
               </div>
@@ -847,7 +1026,7 @@ export default function NGODashboard() {
                         Contact Person
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {selectedNGO.contactPerson}
+                        {selectedNGO.contactInfo.contactPerson}
                       </p>
                     </div>
                   </div>
@@ -870,7 +1049,7 @@ export default function NGODashboard() {
                         Email
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {selectedNGO.email}
+                        {selectedNGO.contactInfo.email}
                       </p>
                     </div>
                   </div>
@@ -893,7 +1072,7 @@ export default function NGODashboard() {
                         Phone
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {selectedNGO.phone}
+                        {selectedNGO.contactInfo.phone}
                       </p>
                     </div>
                   </div>
@@ -924,9 +1103,6 @@ export default function NGODashboard() {
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                         {selectedNGO.address}
                       </p>
-                      <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                        {selectedNGO.district}, {selectedNGO.state}
-                      </p>
                     </div>
                   </div>
                 </div>
@@ -938,45 +1114,54 @@ export default function NGODashboard() {
                   Recent Food Requests
                 </h3>
                 <div className="space-y-2 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-                  <div className="flex items-center justify-between border-b border-zinc-200 pb-2 dark:border-zinc-800">
-                    <div>
-                      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        Emergency Food Supply
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Requested: Oct 28, 2024
-                      </p>
-                    </div>
-                    <span className="inline-flex rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700 dark:bg-green-950 dark:text-green-400">
-                      Fulfilled
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-zinc-200 pb-2 dark:border-zinc-800">
-                    <div>
-                      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        Weekly Ration Distribution
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Requested: Oct 30, 2024
-                      </p>
-                    </div>
-                    <span className="inline-flex rounded-full bg-orange-100 px-2 py-1 text-xs font-medium text-orange-700 dark:bg-orange-950 dark:text-orange-400">
-                      Pending
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        Community Kitchen Supply
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Requested: Nov 1, 2024
-                      </p>
-                    </div>
-                    <span className="inline-flex rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-700 dark:bg-blue-950 dark:text-blue-400">
-                      Processing
-                    </span>
-                  </div>
+                  {ngoRequests.length > 0 ? (
+                    ngoRequests.slice(0, 5).map((request, idx) => (
+                      <div
+                        key={request._id || idx}
+                        className={`flex items-center justify-between ${
+                          idx < ngoRequests.length - 1 && idx < 4
+                            ? "border-b border-zinc-200 pb-2 dark:border-zinc-800"
+                            : ""
+                        }`}
+                      >
+                        <div>
+                          <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                            {request.items
+                              ?.map((item) => item.foodType)
+                              .join(", ") || "Food Request"}
+                          </p>
+                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                            Requested:{" "}
+                            {new Date(
+                              request.createdOn || request.createdAt || ""
+                            ).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                          </p>
+                        </div>
+                        <span
+                          className={`inline-flex rounded-full px-2 py-1 text-xs font-medium ${
+                            request.status === "fulfilled"
+                              ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-400"
+                              : request.status === "pending"
+                                ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400"
+                                : request.status === "approved"
+                                  ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
+                                  : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"
+                          }`}
+                        >
+                          {request.status?.charAt(0).toUpperCase() +
+                            request.status?.slice(1)}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                      No requests found for this NGO
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -988,17 +1173,19 @@ export default function NGODashboard() {
                 <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                      Joined Date
+                      Created Date
                     </span>
                     <span className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                      {new Date(selectedNGO.joinedDate).toLocaleDateString(
-                        "en-US",
-                        {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                        }
-                      )}
+                      {selectedNGO.createdAt
+                        ? new Date(selectedNGO.createdAt).toLocaleDateString(
+                            "en-US",
+                            {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            }
+                          )
+                        : "N/A"}
                     </span>
                   </div>
                 </div>
@@ -1347,11 +1534,20 @@ export default function NGODashboard() {
                             </div>
                             <div className="flex-1">
                               <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">
-                                {request.itemType} - {request.quantity}{" "}
-                                {request.unit}
+                                {request.items && request.items.length > 0
+                                  ? request.items
+                                      .map(
+                                        (item: any) =>
+                                          `${item.foodType} - ${item.required_kg} kg`
+                                      )
+                                      .join(", ")
+                                  : "No items specified"}
                               </h3>
                               <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                                Requested by {request.ngoName}
+                                Requested by{" "}
+                                {typeof request.requesterNode === "object"
+                                  ? request.requesterNode?.name
+                                  : request.ngoName || "Unknown NGO"}
                               </p>
                             </div>
                             <span
@@ -1385,27 +1581,20 @@ export default function NGODashboard() {
                                 />
                               </svg>
                               <span className="text-zinc-600 dark:text-zinc-400">
-                                <span className="font-medium">Item:</span>{" "}
-                                {request.itemType}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 text-sm">
-                              <svg
-                                className="h-4 w-4 text-zinc-400"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  strokeWidth={2}
-                                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
-                                />
-                              </svg>
-                              <span className="text-zinc-600 dark:text-zinc-400">
-                                <span className="font-medium">Quantity:</span>{" "}
-                                {request.quantity} {request.unit}
+                                <span className="font-medium">Items:</span>{" "}
+                                {request.items && request.items.length > 0
+                                  ? request.items.map(
+                                      (item: any, idx: number) => (
+                                        <span key={idx}>
+                                          {item.foodType} ({item.required_kg}{" "}
+                                          kg)
+                                          {idx < request.items.length - 1
+                                            ? ", "
+                                            : ""}
+                                        </span>
+                                      )
+                                    )
+                                  : "N/A"}
                               </span>
                             </div>
                             <div className="flex items-center gap-2 text-sm">
@@ -1426,9 +1615,11 @@ export default function NGODashboard() {
                                 <span className="font-medium">
                                   Required by:
                                 </span>{" "}
-                                {new Date(
-                                  request.requiredBy
-                                ).toLocaleDateString()}
+                                {request.requiredBefore
+                                  ? new Date(
+                                      request.requiredBefore
+                                    ).toLocaleDateString()
+                                  : "Not specified"}
                               </span>
                             </div>
                           </div>
@@ -1458,14 +1649,23 @@ export default function NGODashboard() {
                             </svg>
                             <span className="text-zinc-600 dark:text-zinc-400">
                               Requested on{" "}
-                              {new Date(request.requestDate).toLocaleDateString(
-                                "en-US",
-                                {
-                                  month: "short",
-                                  day: "numeric",
-                                  year: "numeric",
-                                }
-                              )}
+                              {request.createdOn
+                                ? new Date(
+                                    request.createdOn
+                                  ).toLocaleDateString("en-US", {
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                  })
+                                : request.createdAt
+                                  ? new Date(
+                                      request.createdAt
+                                    ).toLocaleDateString("en-US", {
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                    })
+                                  : "Not specified"}
                             </span>
                           </div>
                         </div>
@@ -1482,13 +1682,27 @@ export default function NGODashboard() {
                           View Details
                         </button>
                         <button
-                          onClick={() => handleAcceptRequest(request.id)}
+                          onClick={() => {
+                            console.log(
+                              "Accept button clicked for request:",
+                              request
+                            );
+                            console.log("Using ID:", request._id || request.id);
+                            handleAcceptRequest(request._id || request.id);
+                          }}
                           className="flex-1 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700"
                         >
                           ✓ Accept
                         </button>
                         <button
-                          onClick={() => handleRejectRequest(request.id)}
+                          onClick={() => {
+                            console.log(
+                              "Reject button clicked for request:",
+                              request
+                            );
+                            console.log("Using ID:", request._id || request.id);
+                            handleRejectRequest(request._id || request.id);
+                          }}
                           className="flex-1 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700"
                         >
                           ✕ Reject
@@ -1607,13 +1821,17 @@ export default function NGODashboard() {
                     REQUIRED BY
                   </p>
                   <p className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-white">
-                    {new Date(selectedRequest.requiredBy).toLocaleDateString(
-                      "en-US",
-                      {
-                        month: "short",
-                        day: "numeric",
-                      }
-                    )}
+                    {selectedRequest.requiredBefore ||
+                    selectedRequest.requiredBy
+                      ? new Date(
+                          selectedRequest.requiredBefore ||
+                            selectedRequest.requiredBy ||
+                            ""
+                        ).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        })
+                      : "N/A"}
                   </p>
                 </div>
               </div>
@@ -1655,13 +1873,23 @@ export default function NGODashboard() {
                         Request Submitted
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {new Date(
-                          selectedRequest.requestDate
-                        ).toLocaleDateString("en-US", {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                        })}
+                        {selectedRequest.createdOn
+                          ? new Date(
+                              selectedRequest.createdOn
+                            ).toLocaleDateString("en-US", {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            })
+                          : selectedRequest.createdAt
+                            ? new Date(
+                                selectedRequest.createdAt
+                              ).toLocaleDateString("en-US", {
+                                year: "numeric",
+                                month: "long",
+                                day: "numeric",
+                              })
+                            : "Not specified"}
                       </p>
                     </div>
                   </div>
@@ -1684,13 +1912,15 @@ export default function NGODashboard() {
                         Required By
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {new Date(
-                          selectedRequest.requiredBy
-                        ).toLocaleDateString("en-US", {
-                          year: "numeric",
-                          month: "long",
-                          day: "numeric",
-                        })}
+                        {selectedRequest.requiredBefore
+                          ? new Date(
+                              selectedRequest.requiredBefore
+                            ).toLocaleDateString("en-US", {
+                              year: "numeric",
+                              month: "long",
+                              day: "numeric",
+                            })
+                          : "Not specified"}
                       </p>
                     </div>
                   </div>
@@ -1701,7 +1931,17 @@ export default function NGODashboard() {
               <div className="flex gap-3">
                 <button
                   onClick={() => {
-                    handleAcceptRequest(selectedRequest.id);
+                    console.log(
+                      "Modal Accept button clicked for:",
+                      selectedRequest
+                    );
+                    console.log(
+                      "Using ID:",
+                      selectedRequest._id || selectedRequest.id
+                    );
+                    handleAcceptRequest(
+                      selectedRequest._id || selectedRequest.id
+                    );
                   }}
                   className="flex-1 rounded-lg bg-green-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-green-700"
                 >
@@ -1709,7 +1949,17 @@ export default function NGODashboard() {
                 </button>
                 <button
                   onClick={() => {
-                    handleRejectRequest(selectedRequest.id);
+                    console.log(
+                      "Modal Reject button clicked for:",
+                      selectedRequest
+                    );
+                    console.log(
+                      "Using ID:",
+                      selectedRequest._id || selectedRequest.id
+                    );
+                    handleRejectRequest(
+                      selectedRequest._id || selectedRequest.id
+                    );
                   }}
                   className="flex-1 rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-red-700"
                 >

@@ -44,7 +44,7 @@ const storeEvent = asyncHandler(async (req, res) => {
 
     // 🟩 FARM PRODUCTION EVENT
     if (type === "farm_production") {
-      const { node, quantity_kg ,batch} = payload;
+      const { node, quantity_kg, batch } = payload;
 
       if (!node || !node.nodeId) {
         console.log(payload);
@@ -151,8 +151,8 @@ const storeEvent = asyncHandler(async (req, res) => {
         createdBatch
           ? "Event stored and new batch created successfully."
           : createdRequest
-          ? "Event stored and new NGO request created successfully."
-          : "Event stored successfully."
+            ? "Event stored and new NGO request created successfully."
+            : "Event stored successfully."
       )
     );
   } catch (error) {

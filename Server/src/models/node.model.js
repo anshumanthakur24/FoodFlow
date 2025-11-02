@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const nodeSchema = new mongoose.Schema({
   type: {
     type: String,
-    enum: ["farm", "warehouse"],
+    enum: ["farm", "warehouse", "ngo"],
     required: true,
   },
   name: {

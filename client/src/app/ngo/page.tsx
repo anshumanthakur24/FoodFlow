@@ -1,22 +1,38 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { ngoService } from "@/services/ngo.service";
 
 interface GoodsRequest {
-  id: string;
-  itemType: string;
-  quantity: number;
-  unit: string;
-  urgency: "low" | "medium" | "high" | "critical";
-  requestDate: string;
-  requiredBy: string;
-  description: string;
-  status: "pending" | "approved" | "rejected" | "fulfilled";
+  _id?: string;
+  id?: string;
+  requesterNode?: string;
+  requestId?: string;
+  requestID?: string; // Backend uses this
+  itemType?: string;
+  quantity?: number;
+  unit?: string;
+  urgency?: "low" | "medium" | "high" | "critical";
+  requestDate?: string;
+  requiredBy?: string;
+  requiredBy_iso?: string;
+  requiredBefore?: string; // Backend field name
+  createdOn?: string; // Backend field name
+  description?: string;
+  status: "pending" | "approved" | "rejected" | "fulfilled" | "cancelled";
+  items?: {
+    foodType: string;
+    required_kg: number;
+  }[];
+  createdAt?: string;
+  fullFilledOn?: string | null;
+  fulfilledBy?: string | null;
+  approvedOn?: string | null;
 }
 
 // Mock NGO data (in real app, this would come from auth/API)
 const CURRENT_NGO = {
-  id: "1",
+  id: "67269fa0c4d26edff3ddb08a", // Replace with actual NGO node ID from your database
   name: "Food For All Mumbai",
   registrationNumber: "NGO-MUM-2020-001",
   contactPerson: "Rajesh Kumar",
@@ -26,56 +42,8 @@ const CURRENT_NGO = {
   state: "Maharashtra",
 };
 
-// Mock requests data
-const MOCK_REQUESTS: GoodsRequest[] = [
-  {
-    id: "req-1",
-    itemType: "Rice",
-    quantity: 500,
-    unit: "kg",
-    urgency: "high",
-    requestDate: "2024-11-01",
-    requiredBy: "2024-11-05",
-    description: "Emergency supply needed for flood-affected families",
-    status: "approved",
-  },
-  {
-    id: "req-2",
-    itemType: "Wheat Flour",
-    quantity: 300,
-    unit: "kg",
-    urgency: "medium",
-    requestDate: "2024-10-28",
-    requiredBy: "2024-11-08",
-    description: "Monthly distribution for community kitchen program",
-    status: "fulfilled",
-  },
-  {
-    id: "req-3",
-    itemType: "Lentils (Dal)",
-    quantity: 200,
-    unit: "kg",
-    urgency: "low",
-    requestDate: "2024-10-25",
-    requiredBy: "2024-11-10",
-    description: "Regular supply for orphanage feeding program",
-    status: "pending",
-  },
-  {
-    id: "req-4",
-    itemType: "Cooking Oil",
-    quantity: 50,
-    unit: "liters",
-    urgency: "medium",
-    requestDate: "2024-10-20",
-    requiredBy: "2024-11-02",
-    description: "Monthly requirement for distribution center",
-    status: "rejected",
-  },
-];
-
 export default function NGOPortal() {
-  const [requests, setRequests] = useState<GoodsRequest[]>(MOCK_REQUESTS);
+  const [requests, setRequests] = useState<GoodsRequest[]>([]);
   const [isNewRequestModalOpen, setIsNewRequestModalOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<GoodsRequest | null>(
     null
@@ -83,6 +51,8 @@ export default function NGOPortal() {
   const [activeTab, setActiveTab] = useState<
     "overview" | "requests" | "analytics"
   >("overview");
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Form state for new request
   const [newRequest, setNewRequest] = useState({
@@ -91,8 +61,26 @@ export default function NGOPortal() {
     unit: "kg",
     urgency: "medium" as "low" | "medium" | "high" | "critical",
     requiredBy: "",
-    description: "",
   });
+
+  // Fetch requests on component mount
+  useEffect(() => {
+    fetchRequests();
+  }, []);
+
+  const fetchRequests = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await ngoService.getRequestsByNGO(CURRENT_NGO.id);
+      setRequests(response.requests);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch requests");
+      console.error("Error fetching requests:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Calculate statistics
   const totalRequests = requests.length;
@@ -107,29 +95,81 @@ export default function NGOPortal() {
     (r) => r.status === "rejected"
   ).length;
 
-  const handleSubmitRequest = (e: React.FormEvent) => {
+  const handleSubmitRequest = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newReq: GoodsRequest = {
-      id: `req-${Date.now()}`,
-      itemType: newRequest.itemType,
-      quantity: Number(newRequest.quantity),
-      unit: newRequest.unit,
-      urgency: newRequest.urgency,
-      requestDate: new Date().toISOString().split("T")[0],
-      requiredBy: newRequest.requiredBy,
-      description: newRequest.description,
-      status: "pending",
-    };
-    setRequests([newReq, ...requests]);
-    setIsNewRequestModalOpen(false);
-    setNewRequest({
-      itemType: "",
-      quantity: "",
-      unit: "kg",
-      urgency: "medium",
-      requiredBy: "",
-      description: "",
-    });
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const payload = {
+        requesterNode: CURRENT_NGO.id,
+        requestId: `REQ-${Date.now()}`,
+        createdOn: new Date().toISOString(),
+        requiredBefore: new Date(newRequest.requiredBy).toISOString(),
+        items: [
+          {
+            foodType: newRequest.itemType,
+            required_kg: Number(newRequest.quantity),
+          },
+        ],
+      };
+
+      await ngoService.createRequest(payload);
+
+      // Refresh requests list
+      await fetchRequests();
+
+      setIsNewRequestModalOpen(false);
+      setNewRequest({
+        itemType: "",
+        quantity: "",
+        unit: "kg",
+        urgency: "medium",
+        requiredBy: "",
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create request");
+      console.error("Error creating request:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Helper functions to handle different data formats
+  const getRequestId = (request: GoodsRequest) => {
+    return request._id || request.id || "";
+  };
+
+  const getItemType = (request: GoodsRequest) => {
+    if (request.itemType) return request.itemType;
+    if (request.items && request.items.length > 0) {
+      return request.items[0].foodType;
+    }
+    return "N/A";
+  };
+
+  const getQuantity = (request: GoodsRequest) => {
+    if (request.quantity) return request.quantity;
+    if (request.items && request.items.length > 0) {
+      return request.items[0].required_kg;
+    }
+    return 0;
+  };
+
+  const getRequestDate = (request: GoodsRequest) => {
+    if (request.requestDate) return request.requestDate;
+    if (request.createdAt)
+      return new Date(request.createdAt).toISOString().split("T")[0];
+    return new Date().toISOString().split("T")[0];
+  };
+
+  const getRequiredBy = (request: GoodsRequest) => {
+    // Check backend field first
+    if (request.requiredBefore) return request.requiredBefore;
+    if (request.requiredBy) return request.requiredBy;
+    if (request.requiredBy_iso)
+      return new Date(request.requiredBy_iso).toISOString().split("T")[0];
+    return "";
   };
 
   return (
@@ -173,6 +213,76 @@ export default function NGOPortal() {
       </header>
 
       <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        {/* Error Message */}
+        {error && (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950">
+            <div className="flex items-center gap-3">
+              <svg
+                className="h-5 w-5 text-red-600 dark:text-red-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+              <button
+                onClick={() => setError(null)}
+                className="ml-auto text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+              >
+                <svg
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Loading Indicator */}
+        {isLoading && (
+          <div className="mb-6 flex items-center justify-center rounded-lg border border-zinc-200 bg-white p-8 dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center gap-3">
+              <svg
+                className="h-6 w-6 animate-spin text-purple-600"
+                fill="none"
+                viewBox="0 0 24 24"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                ></circle>
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                ></path>
+              </svg>
+              <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                Loading...
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="mb-6 border-b border-zinc-200 dark:border-zinc-800">
           <nav className="flex space-x-8">
@@ -364,32 +474,16 @@ export default function NGOPortal() {
                 <div className="space-y-4">
                   {requests.slice(0, 3).map((request) => (
                     <div
-                      key={request.id}
+                      key={getRequestId(request)}
                       onClick={() => setSelectedRequest(request)}
                       className="flex cursor-pointer items-center justify-between rounded-lg border border-zinc-200 p-4 transition-colors hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800"
                     >
                       <div className="flex items-center gap-3">
                         <div
-                          className={`flex h-10 w-10 items-center justify-center rounded-full ${
-                            request.urgency === "critical"
-                              ? "bg-red-100 dark:bg-red-950"
-                              : request.urgency === "high"
-                                ? "bg-orange-100 dark:bg-orange-950"
-                                : request.urgency === "medium"
-                                  ? "bg-yellow-100 dark:bg-yellow-950"
-                                  : "bg-blue-100 dark:bg-blue-950"
-                          }`}
+                          className={`flex h-10 w-10 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-950`}
                         >
                           <svg
-                            className={`h-5 w-5 ${
-                              request.urgency === "critical"
-                                ? "text-red-600 dark:text-red-400"
-                                : request.urgency === "high"
-                                  ? "text-orange-600 dark:text-orange-400"
-                                  : request.urgency === "medium"
-                                    ? "text-yellow-600 dark:text-yellow-400"
-                                    : "text-blue-600 dark:text-blue-400"
-                            }`}
+                            className={`h-5 w-5 text-purple-600 dark:text-purple-400`}
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
@@ -404,12 +498,15 @@ export default function NGOPortal() {
                         </div>
                         <div>
                           <p className="font-medium text-zinc-900 dark:text-white">
-                            {request.itemType} - {request.quantity}{" "}
-                            {request.unit}
+                            {getItemType(request)} - {getQuantity(request)} kg
                           </p>
                           <p className="text-sm text-zinc-500 dark:text-zinc-400">
                             Required by{" "}
-                            {new Date(request.requiredBy).toLocaleDateString()}
+                            {getRequiredBy(request)
+                              ? new Date(
+                                  getRequiredBy(request)
+                                ).toLocaleDateString()
+                              : "N/A"}
                           </p>
                         </div>
                       </div>
@@ -465,32 +562,16 @@ export default function NGOPortal() {
             <div className="space-y-4">
               {requests.map((request) => (
                 <div
-                  key={request.id}
+                  key={getRequestId(request)}
                   className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900"
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex items-start gap-3">
                       <div
-                        className={`flex h-12 w-12 items-center justify-center rounded-full ${
-                          request.urgency === "critical"
-                            ? "bg-red-100 dark:bg-red-950"
-                            : request.urgency === "high"
-                              ? "bg-orange-100 dark:bg-orange-950"
-                              : request.urgency === "medium"
-                                ? "bg-yellow-100 dark:bg-yellow-950"
-                                : "bg-blue-100 dark:bg-blue-950"
-                        }`}
+                        className={`flex h-12 w-12 items-center justify-center rounded-full bg-purple-100 dark:bg-purple-950`}
                       >
                         <svg
-                          className={`h-6 w-6 ${
-                            request.urgency === "critical"
-                              ? "text-red-600 dark:text-red-400"
-                              : request.urgency === "high"
-                                ? "text-orange-600 dark:text-orange-400"
-                                : request.urgency === "medium"
-                                  ? "text-yellow-600 dark:text-yellow-400"
-                                  : "text-blue-600 dark:text-blue-400"
-                          }`}
+                          className={`h-6 w-6 text-purple-600 dark:text-purple-400`}
                           fill="none"
                           viewBox="0 0 24 24"
                           stroke="currentColor"
@@ -506,36 +587,31 @@ export default function NGOPortal() {
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
                           <h3 className="text-lg font-semibold text-zinc-900 dark:text-white">
-                            {request.itemType}
+                            {getItemType(request)}
                           </h3>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium uppercase ${
-                              request.urgency === "critical"
-                                ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
-                                : request.urgency === "high"
-                                  ? "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-400"
-                                  : request.urgency === "medium"
-                                    ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-400"
-                                    : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-400"
-                            }`}
-                          >
-                            {request.urgency}
-                          </span>
                         </div>
                         <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                          Quantity: {request.quantity} {request.unit}
+                          Quantity: {getQuantity(request)} kg
                         </p>
                         <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-                          {request.description}
+                          {request.description || "No description"}
                         </p>
                         <div className="mt-3 flex flex-wrap gap-4 text-sm text-zinc-500 dark:text-zinc-500">
                           <span>
                             Requested:{" "}
-                            {new Date(request.requestDate).toLocaleDateString()}
+                            {getRequestDate(request)
+                              ? new Date(
+                                  getRequestDate(request)
+                                ).toLocaleDateString()
+                              : "N/A"}
                           </span>
                           <span>
                             Required by:{" "}
-                            {new Date(request.requiredBy).toLocaleDateString()}
+                            {getRequiredBy(request)
+                              ? new Date(
+                                  getRequiredBy(request)
+                                ).toLocaleDateString()
+                              : "N/A"}
                           </span>
                         </div>
                       </div>
@@ -750,13 +826,15 @@ export default function NGOPortal() {
               </h3>
               <div className="space-y-4">
                 {requests
-                  .sort(
-                    (a, b) =>
-                      new Date(b.requestDate).getTime() -
-                      new Date(a.requestDate).getTime()
-                  )
+                  .sort((a, b) => {
+                    const dateA = getRequestDate(a);
+                    const dateB = getRequestDate(b);
+                    return (
+                      new Date(dateB).getTime() - new Date(dateA).getTime()
+                    );
+                  })
                   .map((request, index) => (
-                    <div key={request.id} className="flex gap-4">
+                    <div key={getRequestId(request)} className="flex gap-4">
                       <div className="flex flex-col items-center">
                         <div
                           className={`flex h-8 w-8 items-center justify-center rounded-full ${
@@ -787,11 +865,15 @@ export default function NGOPortal() {
                       </div>
                       <div className="flex-1 pb-8">
                         <p className="font-medium text-zinc-900 dark:text-white">
-                          {request.itemType} - {request.quantity} {request.unit}
+                          {getItemType(request)} - {getQuantity(request)} kg
                         </p>
                         <p className="text-sm text-zinc-600 dark:text-zinc-400">
                           Status: {request.status} •{" "}
-                          {new Date(request.requestDate).toLocaleDateString()}
+                          {getRequestDate(request)
+                            ? new Date(
+                                getRequestDate(request)
+                              ).toLocaleDateString()
+                            : "N/A"}
                         </p>
                       </div>
                     </div>
@@ -935,25 +1017,6 @@ export default function NGOPortal() {
                     />
                   </div>
                 </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                    Description *
-                  </label>
-                  <textarea
-                    required
-                    rows={4}
-                    value={newRequest.description}
-                    onChange={(e) =>
-                      setNewRequest({
-                        ...newRequest,
-                        description: e.target.value,
-                      })
-                    }
-                    className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-zinc-900 focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-white"
-                    placeholder="Explain why you need these items and how they will be used..."
-                  />
-                </div>
               </div>
 
               <div className="mt-6 flex gap-3">
@@ -1081,7 +1144,7 @@ export default function NGOPortal() {
                       Quantity
                     </p>
                     <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-white">
-                      {selectedRequest.quantity} {selectedRequest.unit}
+                      {getQuantity(selectedRequest)} kg
                     </p>
                   </div>
                   <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-800">
@@ -1089,20 +1152,13 @@ export default function NGOPortal() {
                       Required By
                     </p>
                     <p className="mt-1 text-xl font-semibold text-zinc-900 dark:text-white">
-                      {new Date(
-                        selectedRequest.requiredBy
-                      ).toLocaleDateString()}
+                      {getRequiredBy(selectedRequest)
+                        ? new Date(
+                            getRequiredBy(selectedRequest)
+                          ).toLocaleDateString()
+                        : "N/A"}
                     </p>
                   </div>
-                </div>
-
-                <div>
-                  <h4 className="mb-2 text-sm font-semibold text-zinc-900 dark:text-white">
-                    Description
-                  </h4>
-                  <p className="rounded-lg border border-zinc-200 bg-zinc-50 p-4 text-sm text-zinc-700 dark:border-zinc-800 dark:bg-zinc-800 dark:text-zinc-300">
-                    {selectedRequest.description}
-                  </p>
                 </div>
 
                 <div className="grid grid-cols-1 gap-3">
@@ -1125,9 +1181,11 @@ export default function NGOPortal() {
                         Request Date
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-white">
-                        {new Date(
-                          selectedRequest.requestDate
-                        ).toLocaleDateString()}
+                        {getRequestDate(selectedRequest)
+                          ? new Date(
+                              getRequestDate(selectedRequest)
+                            ).toLocaleDateString()
+                          : "N/A"}
                       </p>
                     </div>
                   </div>
