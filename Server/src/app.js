@@ -6,9 +6,9 @@ import logger from "./middleware/logger.middleware.js";
 const app = express();
 app.use(cookieParser());
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(cookieParser());
 app.use(express.static("public"));
 import { startScenario } from "./controllers/node.controller.js";

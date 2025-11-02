@@ -1,5 +1,5 @@
 import axios from "axios";
-import asyncHandler from "../utils/asyncHandler.js";
+import {asyncHandler} from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Node } from "../models/node.model.js";
@@ -9,12 +9,12 @@ import { Shipment } from "../models/shipment.model.js"; // assuming you have thi
 
 const sendSimulationData = asyncHandler(async (req, res) => {
   try {
-    const baseURL = process.env.SIMULATION_BASE_URL || req.body.baseURL;
+    const baseURL = process.env.SIMULATION_BASE_URL || "http://localhost:5050";
     if (!baseURL) {
       throw new ApiError(400, "Missing 'baseURL'. Please provide the target endpoint base URL.");
     }
 
-    const endpoint = `${baseURL}/simulation/data`;
+    const endpoint = `${baseURL}/predict`;
 
     // 🟢 Fetch all data from MongoDB
     const [nodes, requests, shipments, batches] = await Promise.all([
@@ -81,6 +81,7 @@ const sendSimulationData = asyncHandler(async (req, res) => {
       )
     );
   } catch (error) {
+    console.log(error);
     if (error.response) {
       throw new ApiError(
         error.response.status,

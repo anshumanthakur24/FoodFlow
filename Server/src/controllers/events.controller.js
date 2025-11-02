@@ -3,8 +3,6 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { Event } from "../models/event.model.js";
 import { Request } from "../models/request.model.js";
-import { Event } from "../models/event.model.js";
-import { Request } from "../models/request.model.js";
 import { Node } from "../models/node.model.js";
 import { Batch } from "../models/batch.model.js";
 import { NGO } from "../models/NGO.model.js";

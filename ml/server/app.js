@@ -11,7 +11,7 @@ const { runInference } = require('./services/pythonRunner');
 const { planTransfers } = require('./services/transferPlanner');
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', async (req, res, next) => {
   try {
