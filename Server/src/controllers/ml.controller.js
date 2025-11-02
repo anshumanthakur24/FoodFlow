@@ -52,6 +52,10 @@ const sendSimulationData = asyncHandler(async (req, res) => {
         type: node.type,
         district: node.district,
         state: node.state || node.regionId || "Unknown",
+        capacity_kg:
+          typeof node.capacity_kg === "number"
+            ? node.capacity_kg
+            : Number(node.capacity_kg) || 0,
         location: coordinates
           ? { type: "Point", coordinates }
           : node.location || null,
@@ -111,6 +115,10 @@ const sendSimulationData = asyncHandler(async (req, res) => {
     const formattedBatches = batches.map((b) => ({
       batchId: b._id.toString(),
       originNode: b.originNode?.toString(),
+      capacity_kg:
+        typeof b.capacity_kg === "number"
+          ? b.capacity_kg
+          : Number(b.capacity_kg) || 0,
       quantity_kg:
         typeof b.quantity_kg === "number"
           ? b.quantity_kg
@@ -277,13 +285,128 @@ const getData = asyncHandler(async (req, res) => {
     timeout: 15000,
   });
 
+  // Extract farm_to_warehouse and warehouse_to_warehouse data
+  const { farm_to_warehouse = [], warehouse_to_warehouse = [] } = response.data || {};
+  
+  // Combine both arrays with transfer type marker and create Shipment documents
+  const allTransfers = [
+    ...(Array.isArray(farm_to_warehouse) ? farm_to_warehouse.map(t => ({ ...t, _transferType: 'farm_to_warehouse' })) : []),
+    ...(Array.isArray(warehouse_to_warehouse) ? warehouse_to_warehouse.map(t => ({ ...t, _transferType: 'warehouse_to_warehouse' })) : [])
+  ];
+
+  const createdShipments = [];
+  const errors = [];
+
+  for (const transfer of allTransfers) {
+    try {
+      const sourceMongoId = transfer?.source?.mongoId;
+      const sourceNodeId = transfer?.source?.nodeId;
+      const targetMongoId = transfer?.target?.mongoId;
+      const targetNodeId = transfer?.target?.nodeId;
+
+      if (!sourceMongoId && !sourceNodeId) {
+        console.warn("Skipping transfer with missing source mongoId/nodeId:", transfer);
+        continue;
+      }
+
+      if (!targetMongoId && !targetNodeId) {
+        console.warn("Skipping transfer with missing target mongoId/nodeId:", transfer);
+        continue;
+      }
+
+      // Find nodes - prefer mongoId, fallback to nodeId
+      let fromNode = null;
+      let toNode = null;
+
+      if (sourceMongoId) {
+        try {
+          fromNode = await Node.findById(sourceMongoId);
+        } catch (err) {
+          // If mongoId is not a valid ObjectId format, try nodeId
+        }
+      }
+
+      if (!fromNode && sourceNodeId) {
+        fromNode = await Node.findOne({ nodeId: sourceNodeId });
+      }
+
+      if (targetMongoId) {
+        try {
+          toNode = await Node.findById(targetMongoId);
+        } catch (err) {
+          // If mongoId is not a valid ObjectId format, try nodeId
+        }
+      }
+
+      if (!toNode && targetNodeId) {
+        toNode = await Node.findOne({ nodeId: targetNodeId });
+      }
+
+      if (!fromNode || !toNode) {
+        console.warn(`Skipping transfer: Node not found. From: ${sourceMongoId || sourceNodeId}, To: ${targetMongoId || targetNodeId}`);
+        continue;
+      }
+
+      // Use the actual node _id from database
+      const fromNodeId = fromNode._id;
+      const toNodeId = toNode._id;
+
+      // Calculate travel time from distance (assuming average speed of 60 km/h)
+      // travel_time_minutes = (distance_km / 60) * 60
+      const distanceKm = transfer?.distance_km || 0;
+      const estimatedTravelMinutes = distanceKm > 0 ? Math.round((distanceKm / 60) * 60) : null;
+
+      // Generate shipmentID if not present
+      const shipmentID = `SH-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+      // Determine transfer type (use transfer.type field or fallback to marker)
+      const transferType = transfer?.type || transfer?._transferType || null;
+
+      // Create shipment document
+      const shipmentData = {
+        shipmentID,
+        fromNode: fromNodeId,
+        toNode: toNodeId,
+        start_iso: new Date(), // Current date/time as start
+        travel_time_minutes: estimatedTravelMinutes ? String(estimatedTravelMinutes) : null,
+        transfer_type: transferType,
+        suggested_quantity_kg: transfer?.suggested_quantity_kg || null,
+        distance_km: distanceKm || null,
+        notes: transfer?.notes || null,
+        routing: transfer?.route || transfer?.waypoints || null,
+        batchIds: [] // Empty initially, batches can be added later
+      };
+
+      const shipment = await Shipment.create(shipmentData);
+      createdShipments.push(shipment);
+    } catch (error) {
+      console.error("Error creating shipment:", error);
+      errors.push({
+        transfer,
+        error: error.message
+      });
+    }
+  }
+
   return res
     .status(200)
     .json(
       new ApiResponse(
         200,
-        response.data,
-        "Transfer plan generated successfully."
+        {
+          plan: response.data,
+          createdShipments: createdShipments.length,
+          shipments: createdShipments.map(s => ({
+            id: s._id,
+            shipmentID: s.shipmentID,
+            fromNode: s.fromNode,
+            toNode: s.toNode,
+            transfer_type: s.transfer_type,
+            suggested_quantity_kg: s.suggested_quantity_kg
+          })),
+          errors: errors.length > 0 ? errors : undefined
+        },
+        `Transfer plan generated successfully. ${createdShipments.length} shipment(s) created.`
       )
     );
 });

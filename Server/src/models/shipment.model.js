@@ -22,6 +22,23 @@ const shipmentSchema = new mongoose.Schema({
     },
     travel_time_minutes: {
         type: String
+    },
+    transfer_type: {
+        type: String,
+        enum: ['farm_to_warehouse', 'warehouse_to_warehouse'],
+        default: null
+    },
+    suggested_quantity_kg: {
+        type: Number
+    },
+    distance_km: {
+        type: Number
+    },
+    notes: {
+        type: String
+    },
+    routing: {
+        type: mongoose.Schema.Types.Mixed
     }
     },{ timestamps:true });
 
