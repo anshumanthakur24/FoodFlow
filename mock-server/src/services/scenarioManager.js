@@ -1221,12 +1221,8 @@ async function dispatchEvents(events, runtime) {
     if (event.type === 'request' && res && res.ok) {
       try {
         const body = res.data;
-        // Try to extract the created Mongo _id from common API response shapes
         const created =
-          (body && body.data) || // ApiResponse style
-          (body && body.request) ||
-          body ||
-          null;
+          (body && body.data) || (body && body.request) || body || null;
         const mongoId =
           (created && created._id) ||
           (created && created.data && created.data._id) ||

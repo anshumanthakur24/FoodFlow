@@ -1,4 +1,4 @@
-# ML Service (short)
+﻿# ML Service (short)
 
 Unsupervised models for supply–demand monitoring:
 
@@ -24,13 +24,68 @@ cd "e:/Projects/Complete/Arcanix Hack on Hills/ml"; npm install; npm run start
 
 ## HTTP API
 
-GET /health – status and available runs
-GET /runs – list trained run IDs
-GET /runs/:runId/metadata – return metadata for a run
+### GET `/health`
 
-POST /predict – choose one of the two request formats below. If `runId` is omitted, the latest run is used.
+Returns service status, available runs, and configuration.
 
-1. Feature rows (existing format)
+**Response** (`200`):
+
+```json
+{
+  "status": "ok",
+  "artifactsDir": "artifacts",
+  "availableRuns": ["20251101T153949Z"],
+  "pythonBin": "/opt/venv/bin/python",
+  "routeServiceUrl": "https://router.project-osrm.org"
+}
+```
+
+---
+
+### GET `/runs`
+
+Lists all trained run directories under `artifacts/`.
+
+**Response** (`200`):
+
+```json
+{
+  "runs": ["20251101T153949Z", "20240922T101010Z"]
+}
+```
+
+---
+
+### GET `/runs/:runId/metadata`
+
+Returns training metadata for a specific run.
+
+**Response** (`200`):
+
+```json
+{
+  "config": {
+    "feature_frequency": "M",
+    "kmeans_clusters": 6
+  },
+  "feature_summary": {
+    "rows": 128,
+    "frequency": "M"
+  },
+  "feature_columns": ["requested_kg", "incoming_kg"],
+  "generated_at": "2025-11-01T15:39:49Z"
+}
+```
+
+**Response** (`404`): `{ "error": "Run <runId> not found" }` or `{ "error": "metadata.json not found" }`
+
+---
+
+### POST `/predict`
+
+Performs clustering and anomaly detection. Omitting `runId` uses the latest trained run.
+
+**Request Option A** – Pre-computed feature rows:
 
 ```json
 {
@@ -49,7 +104,7 @@ POST /predict – choose one of the two request formats below. If `runId` is omi
 }
 ```
 
-2. Raw Server models (send data “as-is” from `Server/`)
+**Request Option B** – Raw Server documents (auto feature engineering):
 
 ```json
 {
@@ -92,7 +147,7 @@ POST /predict – choose one of the two request formats below. If `runId` is omi
 }
 ```
 
-Response (both formats):
+**Response** (`200`):
 
 ```json
 {
@@ -101,10 +156,9 @@ Response (both formats):
     "requested_kg",
     "incoming_kg",
     "outgoing_kg",
-    "produced_kg",
-    "…"
+    "produced_kg"
   ],
-  "missing_feature_columns": ["…"],
+  "missing_feature_columns": [],
   "results": [
     {
       "state": "Maharashtra",
@@ -118,9 +172,106 @@ Response (both formats):
 }
 ```
 
-POST /transfers/plan – unchanged; accepts the existing payload and augments each suggestion with an OSRM route.
+**Response** (`400`): `{ "error": "Provide either 'records' or raw Server data" }`  
+**Response** (`404`): `{ "error": "Run <runId> not found" }`
 
-Notes:
+---
 
-- Any missing numeric feature is treated as 0.
-- When sending raw Server models, `freq` defaults to the training frequency in `metadata.json` if omitted.
+### POST `/transfers/plan`
+
+Generates recommended warehouse-to-warehouse and farm-to-warehouse transfers with routing.
+
+**Request**:
+
+```json
+{
+  "mode": "all",
+  "maxPairs": 5,
+  "minTransferKg": 200,
+  "overstockRatio": 0.8,
+  "understockRatio": 0.5,
+  "targetRatio": 0.7,
+  "intervalKm": 5,
+  "nodes": [
+    {
+      "nodeId": "WH-001",
+      "type": "warehouse",
+      "capacity_kg": 8000,
+      "location": { "lat": 18.52, "lon": 73.86 }
+    }
+  ],
+  "batches": [
+    {
+      "batchId": "B-01",
+      "originNode": "FARM-123",
+      "currentNode": "WH-001",
+      "current_quantity_kg": 420
+    }
+  ]
+}
+```
+
+**Response** (`200`):
+
+```json
+{
+  "generated_at": "2025-11-02T07:05:48.262Z",
+  "mode": "all",
+  "counts": {
+    "warehouse_to_warehouse": 2,
+    "farm_to_warehouse": 3
+  },
+  "warehouse_to_warehouse": [
+    {
+      "type": "warehouse_to_warehouse",
+      "suggested_quantity_kg": 540,
+      "distance_km": 124.6,
+      "source": {
+        "mongoId": "673c0a123456789abcdef012",
+        "inventory_kg": 6800,
+        "projected_inventory_kg": 6260
+      },
+      "target": {
+        "mongoId": "673c0a123456789abcdef034",
+        "inventory_kg": 3200,
+        "projected_inventory_kg": 3740
+      },
+      "route": {
+        "provider": "osrm",
+        "distanceKm": 128.9,
+        "durationMinutes": 156.7,
+        "points": [
+          { "lat": 18.52, "lon": 73.86, "cumulativeKm": 0 },
+          { "lat": 18.55, "lon": 73.9, "cumulativeKm": 5.2 }
+        ]
+      }
+    }
+  ],
+  "farm_to_warehouse": [
+    {
+      "type": "farm_to_warehouse",
+      "suggested_quantity_kg": 260,
+      "source": {
+        "mongoId": "673c0a123456789abcdef056",
+        "inventory_kg": 520
+      },
+      "target": {
+        "mongoId": "673c0a123456789abcdef034",
+        "inventory_kg": 3100
+      }
+    }
+  ],
+  "routing": {
+    "intervalKm": 5,
+    "baseUrl": "https://router.project-osrm.org"
+  }
+}
+```
+
+---
+
+## Notes
+
+- Any missing numeric feature is treated as `0`.
+- When sending raw Server models to `/predict`, `freq` defaults to the training frequency in `metadata.json` if omitted.
+- Routing falls back to straight-line interpolation if the OSRM service is unavailable.
