@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { NGO } from "../models/NGO.model.js";
 import { Request } from "../models/request.model.js";
+import { Node } from "../models/node.model.js";
 
 const createRequest = asyncHandler(async (req, res) => {
   try {
@@ -218,7 +219,9 @@ const getRequestsByNGO = asyncHandler(async (req, res) => {
     if (requests.length === 0) {
       throw new ApiError(
         404,
-        `No requests found for NGO '${ngoId}'${status ? ` with status '${status}'` : ""}.`
+        `No requests found for NGO '${ngoId}'${
+          status ? ` with status '${status}'` : ""
+        }.`
       );
     }
 
