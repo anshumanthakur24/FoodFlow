@@ -47,6 +47,7 @@ const sendSimulationData = asyncHandler(async (req, res) => {
         ? rawLocation.map((value) => Number(value) || 0)
         : null;
       return {
+        _id: node._id.toString(),
         nodeId: node._id.toString(),
         type: node.type,
         district: node.district,
