@@ -290,24 +290,22 @@ const startScenario = asyncHandler(async (req, res) => {
     }
     console.log(nodes[0]);
     const formattedNodes = nodes.map((node, index) => ({
-      nodeId: `${node?.type?.toUpperCase()}-${String(index + 1)?.padStart(
-        3,
-        "0"
-      )}`,
       nodeId: node._id.toString(),
       name: node.name,
       type: node.type,
       district: node.district,
+      regionId: node.regionId || "Unknown",
       regionId: node.regionId || "Unknown",
       location: node.location,
     }));
 
     const formattedNGOs = ngos.map((ngo, index) => ({
       ngoId: ngo._id.toString(),
+      ngoId: ngo._id.toString(),
       name: ngo.name,
       address: ngo.address,
       contact: ngo.contactInfo || {},
-      requestStats: ngo.requestStats,
+      requestStats: ngo.requestStats
     }));
 
     const payload = {
