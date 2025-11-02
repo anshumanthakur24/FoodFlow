@@ -174,8 +174,17 @@ def to_node_info(record: Dict[str, Any]) -> NodeInfo:
     except (TypeError, ValueError):
         capacity_value = 0.0
 
+    # Prefer Mongo _id; fall back to common alternatives present in payloads
+    raw_id = (
+        record.get("_id")
+        or record.get("mongoId")
+        or record.get("nodeId")
+        or record.get("id")
+    )
+    mongo_id = str(raw_id) if raw_id is not None else ""
+
     return NodeInfo(
-        mongo_id=str(record.get("_id")),
+        mongo_id=mongo_id,
         node_id=record.get("nodeId"),
         name=record.get("name"),
         node_type=(record.get("type") or "").lower() or None,
@@ -225,8 +234,17 @@ def compute_inventory_maps(batches: pd.DataFrame) -> Tuple[Dict[str, float], Dic
         return {}, {}
 
     working = batches.copy()
+    # Normalize column shapes coming from various producers
+    if "currentNode" not in working.columns and "originNode" in working.columns:
+        working["currentNode"] = working["originNode"]
+    else:
+        working["currentNode"] = working.get("currentNode")
+
     working["currentNode"] = working["currentNode"].apply(lambda value: str(value) if value else None)
-    working["originNode"] = working["originNode"].apply(lambda value: str(value) if value else None)
+    working["originNode"] = working.get("originNode").apply(lambda value: str(value) if value else None)
+
+    if "current_quantity_kg" not in working.columns and "quantity_kg" in working.columns:
+        working["current_quantity_kg"] = working["quantity_kg"]
     working["current_quantity_kg"] = pd.to_numeric(working.get("current_quantity_kg"), errors="coerce").fillna(0.0)
     if "status" in working.columns:
         working["status"] = working["status"].astype(str).str.lower()
@@ -524,15 +542,25 @@ def main() -> None:
 
     payload = read_payload(sys.stdin)
     filters = normalize_filters(payload.get("filters"))
+    # Allow payload-driven mode (preferred when Server supplies nodes/batches).
+    nodes_df: pd.DataFrame
+    batches_df: pd.DataFrame
 
-    config = load_config()
-    loader = MongoDataLoader(config.mongo_uri, config.mongo_db)
-
-    try:
-        nodes_df = loader.fetch_nodes()
-        batches_df = loader.fetch_batches()
-    finally:
-        loader.close()
+    if isinstance(payload, dict) and (
+        isinstance(payload.get("nodes"), list)
+        or isinstance(payload.get("batches"), list)
+    ):
+        nodes_df = pd.DataFrame(payload.get("nodes") or [])
+        batches_df = pd.DataFrame(payload.get("batches") or [])
+    else:
+        # Fallback to Mongo-backed loader
+        config = load_config()
+        loader = MongoDataLoader(config.mongo_uri, config.mongo_db)
+        try:
+            nodes_df = loader.fetch_nodes()
+            batches_df = loader.fetch_batches()
+        finally:
+            loader.close()
 
     node_infos = [to_node_info(record) for record in nodes_df.to_dict("records")]
     filtered_nodes = apply_filters(node_infos, filters)
