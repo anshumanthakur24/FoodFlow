@@ -1,12 +1,13 @@
 import { asyncHandler } from "../utils/asyncHandler.js";
-import {ApiError} from "../utils/ApiError.js"
+import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
-import{NGO} from "../models/NGO.model.js";
+import { NGO } from "../models/NGO.model.js";
 import { Request } from "../models/request.model.js";
 
 const createRequest = asyncHandler(async (req, res) => {
   try {
-    const { requesterNode, requestId, createdOn, requiredBefore, items } = req.body;
+    const { requesterNode, requestId, createdOn, requiredBefore, items } =
+      req.body;
 
     if (!requesterNode || !createdOn || !requiredBefore || !requestId) {
       throw new ApiError(
@@ -15,9 +16,10 @@ const createRequest = asyncHandler(async (req, res) => {
       );
     }
 
-    const nodeExists = await Node.findById(requesterNode);
-    if (!nodeExists) {
-      throw new ApiError(404, `Node with ID '${requesterNode}' not found.`);
+    // Check if NGO exists
+    const ngoExists = await NGO.findById(requesterNode);
+    if (!ngoExists) {
+      throw new ApiError(404, `NGO with ID '${requesterNode}' not found.`);
     }
 
     let validatedItems = [];
@@ -25,36 +27,48 @@ const createRequest = asyncHandler(async (req, res) => {
       validatedItems = items
         .filter(
           (item) =>
-            item.foodType && typeof item.foodType === "string" && item.required_kg > 0
+            item.foodType &&
+            typeof item.foodType === "string" &&
+            item.required_kg > 0
         )
         .map((item) => ({
           foodType: item.foodType.trim(),
-          required_kg: Number(item.required_kg)
+          required_kg: Number(item.required_kg),
         }));
 
       if (validatedItems.length === 0) {
-        throw new ApiError(400, "If 'items' is provided, it must contain valid objects with 'foodType' and 'required_kg'.");
+        throw new ApiError(
+          400,
+          "If 'items' is provided, it must contain valid objects with 'foodType' and 'required_kg'."
+        );
       }
     }
 
     const newRequest = await Request.create({
       requesterNode,
-      requestId,
+      requestID: requestId, // Map requestId to requestID (capital ID)
       items: validatedItems,
-      requiredBy_iso: new Date(requiredBefore),
+      createdOn: new Date(createdOn),
+      requiredBefore: new Date(requiredBefore),
       status: "pending",
       fullFilledOn: null,
-      fulfilledBy: null
+      fulfilledBy: null,
     });
 
-    return res.status(201).json(
-      new ApiResponse(
-        201,
-        newRequest,
-        "New NGO request created successfully."
-      )
-    );
+    // Update NGO stats - increment pending and total count
+    await NGO.findByIdAndUpdate(requesterNode, {
+      $inc: { "requestStats.pending": 1, "requestStats.total": 1 },
+    });
 
+    return res
+      .status(201)
+      .json(
+        new ApiResponse(
+          201,
+          newRequest,
+          "New NGO request created successfully."
+        )
+      );
   } catch (error) {
     if (error instanceof ApiError) throw error;
     else
@@ -69,7 +83,7 @@ const createRequest = asyncHandler(async (req, res) => {
 
 const updateRequestStatus = asyncHandler(async (req, res) => {
   try {
-    const { requestID } = req.params; 
+    const { requestID } = req.params;
     const { status, fulfilledBy, fullFilledOn, approvedOn } = req.body;
 
     if (!status) {
@@ -104,12 +118,26 @@ const updateRequestStatus = asyncHandler(async (req, res) => {
           ? new Date(fullFilledOn)
           : new Date(); // default to now
         request.approvedOn = approvedOn ? new Date(approvedOn) : null;
+
+        // Update NGO stats - increment completed count
+        await NGO.findByIdAndUpdate(request.requesterNode, {
+          $inc: {
+            "requestStats.completed": 1,
+            "requestStats.pending": -1,
+            "requestStats.approved": -1,
+          },
+        });
         break;
       }
 
       case "approved": {
         request.status = "approved";
         request.approvedOn = approvedOn ? new Date(approvedOn) : new Date();
+
+        // Update NGO stats - increment approved count
+        await NGO.findByIdAndUpdate(request.requesterNode, {
+          $inc: { "requestStats.approved": 1, "requestStats.pending": -1 },
+        });
         break;
       }
 
@@ -118,6 +146,11 @@ const updateRequestStatus = asyncHandler(async (req, res) => {
         request.fulfilledBy = null;
         request.fullFilledOn = null;
         request.approvedOn = null;
+
+        // Update NGO stats - increment cancelled count
+        await NGO.findByIdAndUpdate(request.requesterNode, {
+          $inc: { "requestStats.cancelled": 1, "requestStats.pending": -1 },
+        });
         break;
       }
 
@@ -133,16 +166,17 @@ const updateRequestStatus = asyncHandler(async (req, res) => {
         throw new ApiError(400, `Invalid status value: '${status}'.`);
     }
 
-
     await request.save();
 
-    return res.status(200).json(
-      new ApiResponse(
-        200,
-        request,
-        `Request status updated successfully to '${status}'.`
-      )
-    );
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          request,
+          `Request status updated successfully to '${status}'.`
+        )
+      );
   } catch (error) {
     if (error instanceof ApiError) throw error;
     else
@@ -158,14 +192,14 @@ const updateRequestStatus = asyncHandler(async (req, res) => {
 const getRequestsByNGO = asyncHandler(async (req, res) => {
   try {
     const { ngoId } = req.params;
-    const { page = 1, limit = 10, status } = req.query; 
+    const { page = 1, limit = 10, status } = req.query;
 
     if (!ngoId) {
       throw new ApiError(400, "Missing NGO ID in request parameters.");
     }
 
     const filter = { requesterNode: ngoId };
-    if (status) filter.status = status; 
+    if (status) filter.status = status;
 
     const pageNum = Math.max(1, parseInt(page));
     const limitNum = Math.max(1, parseInt(limit));
@@ -215,5 +249,79 @@ const getRequestsByNGO = asyncHandler(async (req, res) => {
   }
 });
 
+const getAllRequests = asyncHandler(async (req, res) => {
+  try {
+    const { page = 1, limit = 100, status } = req.query;
 
-export {createRequest,updateRequestStatus,getRequestsByNGO};
+    const filter = {};
+    if (status && status !== "all") filter.status = status;
+
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.max(1, parseInt(limit));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [requests, totalRequests] = await Promise.all([
+      Request.find(filter)
+        .populate("requesterNode", "name address contactInfo")
+        .populate("fulfilledBy", "name type district regionId")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Request.countDocuments(filter),
+    ]);
+
+    const totalPages = Math.ceil(totalRequests / limitNum);
+
+    return res.status(200).json(
+      new ApiResponse(
+        200,
+        {
+          currentPage: pageNum,
+          totalPages,
+          totalRequests,
+          requestsOnPage: requests.length,
+          requests,
+        },
+        `Fetched ${requests.length} requests (page ${pageNum}/${totalPages}).`
+      )
+    );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    else
+      throw new ApiError(
+        500,
+        "Failed to fetch all requests.",
+        [error.message],
+        error.stack
+      );
+  }
+});
+
+const getAllNGOs = asyncHandler(async (req, res) => {
+  try {
+    const ngos = await NGO.find({}).sort({ createdAt: -1 });
+
+    return res
+      .status(200)
+      .json(
+        new ApiResponse(200, ngos, `Fetched ${ngos.length} NGOs successfully.`)
+      );
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    else
+      throw new ApiError(
+        500,
+        "Failed to fetch NGOs.",
+        [error.message],
+        error.stack
+      );
+  }
+});
+
+export {
+  createRequest,
+  updateRequestStatus,
+  getRequestsByNGO,
+  getAllRequests,
+  getAllNGOs,
+};
