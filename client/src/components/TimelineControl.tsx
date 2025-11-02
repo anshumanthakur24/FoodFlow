@@ -19,7 +19,7 @@ export default function TimelineControl({
   onTimeChange,
   isPlaying,
   onPlayPause,
-  playbackSpeed = 1000, // 1 second per second by default
+  playbackSpeed = 172800000, // Fast forward: 2 days per second (30 days in ~15 seconds)
 }: TimelineControlProps) {
   const [isDragging, setIsDragging] = useState(false);
 
@@ -55,14 +55,49 @@ export default function TimelineControl({
     return () => clearInterval(interval);
   }, [isPlaying, currentTime, startTime, endTime, totalDuration, playbackSpeed, onTimeChange, onPlayPause]);
 
-  const formatTime = (date: Date) => {
+  // Calculate days elapsed from start time
+  const getDaysElapsed = (date: Date) => {
+    const millisecondsPerDay = 1000 * 60 * 60 * 24;
+    const diffInMs = date.getTime() - startTime.getTime();
+    // Convert the timeline (30 seconds = 30 days for animation)
+    // Since animation duration is 30 seconds, we map it to 30 days
+    const totalDaysInTimeline = totalDuration / (1000 * 60 * 60 * 24); // Calculate based on actual duration
+    const dayRatio = totalDuration > 0 ? diffInMs / totalDuration : 0;
+    
+    // If total duration is less than a day (in milliseconds), treat each second as a day
+    if (totalDuration < millisecondsPerDay) {
+      // Each second represents a day in fast-forward
+      const days = Math.floor(diffInMs / 1000) + 1;
+      return days;
+    } else {
+      // Actual days difference
+      return Math.floor(diffInMs / millisecondsPerDay) + 1;
+    }
+  };
+
+  const formatDay = (date: Date) => {
+    const daysElapsed = getDaysElapsed(date);
+    return `Day ${daysElapsed}`;
+  };
+
+  const formatDate = (date: Date) => {
+    // Show full date format
     return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
     });
+  };
+
+  // Calculate total days in timeline
+  const getTotalDays = () => {
+    const millisecondsPerDay = 1000 * 60 * 60 * 24;
+    if (totalDuration < millisecondsPerDay) {
+      // Each second represents a day
+      return Math.ceil(totalDuration / 1000);
+    } else {
+      return Math.ceil(totalDuration / millisecondsPerDay);
+    }
   };
 
   const handlePlayPause = () => {
@@ -114,10 +149,28 @@ export default function TimelineControl({
 
         {/* Time Display */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center justify-between mb-1 text-sm text-gray-600">
-            <span className="truncate">{formatTime(startTime)}</span>
-            <span className="font-semibold text-gray-900 px-2">{formatTime(currentTime)}</span>
-            <span className="truncate">{formatTime(endTime)}</span>
+          <div className="flex items-center justify-between mb-1">
+            <div className="text-xs text-gray-500 truncate">
+              <div className="font-medium">{formatDay(startTime)}</div>
+              <div className="text-gray-400">{formatDate(startTime)}</div>
+            </div>
+            <div className="flex flex-col items-center">
+              <span className="text-lg font-bold text-blue-600">{formatDay(currentTime)}</span>
+              <span className="text-xs text-gray-500">
+                {formatDate(currentTime)}
+              </span>
+            </div>
+            <div className="text-xs text-gray-500 truncate text-right">
+              <div className="font-medium">{formatDay(endTime)}</div>
+              <div className="text-gray-400">{formatDate(endTime)}</div>
+            </div>
+          </div>
+          <div className="flex items-center justify-between mb-1 text-xs text-gray-400">
+            <span>Day 1</span>
+            <span className="italic">
+              ⏩ Fast-forwarding {getTotalDays()} days
+            </span>
+            <span>Day {getTotalDays()}</span>
           </div>
           {/* Slider */}
           <input

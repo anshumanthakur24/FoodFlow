@@ -76,12 +76,12 @@ export default function Home() {
   useEffect(() => {
     if (!isPlaying) return;
 
-    const playbackSpeed = 2000; // 2x speed
+    const playbackSpeed = 172800000; // Fast forward: 2 days per second (30 days in ~15 seconds)
     const interval = setInterval(() => {
       setCurrentTime((prevTime) => {
         const currentPos = prevTime.getTime() - startTime.getTime();
         const totalDuration = endTime.getTime() - startTime.getTime();
-        const newPos = currentPos + playbackSpeed / 10;
+        const newPos = currentPos + playbackSpeed / 10; // 0.2 days per update (every 100ms)
 
         if (newPos >= totalDuration) {
           setIsPlaying(false);

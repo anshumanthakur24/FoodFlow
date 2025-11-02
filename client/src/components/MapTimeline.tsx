@@ -122,48 +122,78 @@ export default function MapTimeline({
     return colors[type] || "#6b7280";
   };
 
-  // Create node icon
-  const createNodeIcon = (type: string) => {
+  // Create node icon with improved styling
+  const createNodeIcon = (type: string, node: Node) => {
     const style = getNodeStyle(type);
     return L.divIcon({
       className: "node-marker",
       html: `
         <div style="
-          background-color: ${style.color};
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
+          position: relative;
+          background: linear-gradient(135deg, ${style.color} 0%, ${style.color}dd 100%);
+          width: 40px;
+          height: 40px;
+          border-radius: 50% 50% 50% 0;
+          transform: rotate(-45deg);
           border: 3px solid white;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.4), 0 0 0 2px ${style.color}33;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 18px;
-        ">${style.emoji}</div>
+          font-size: 22px;
+          transition: all 0.3s ease;
+        ">
+          <span style="transform: rotate(45deg); display: block;">${style.emoji}</span>
+        </div>
+        <div style="
+          position: absolute;
+          bottom: -5px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 0;
+          height: 0;
+          border-left: 6px solid transparent;
+          border-right: 6px solid transparent;
+          border-top: 8px solid ${style.color};
+        "></div>
       `,
-      iconSize: [32, 32],
-      iconAnchor: [16, 16],
+      iconSize: [40, 45],
+      iconAnchor: [20, 45],
+      popupAnchor: [0, -45],
     });
   };
 
-  // Create event icon
+  // Create event icon with improved styling
   const createEventIcon = (type: string) => {
     const color = getEventColor(type);
     return L.divIcon({
       className: "event-marker",
       html: `
         <div style="
-          background-color: ${color};
-          width: 20px;
-          height: 20px;
+          position: relative;
+          background: radial-gradient(circle at 30% 30%, ${color}ff, ${color}cc);
+          width: 24px;
+          height: 24px;
           border-radius: 50%;
-          border: 2px solid white;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+          border: 3px solid white;
+          box-shadow: 0 3px 10px rgba(0,0,0,0.4), 0 0 0 2px ${color}44;
           animation: pulse 2s infinite;
-        "></div>
+        ">
+          <div style="
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 8px;
+            height: 8px;
+            background: white;
+            border-radius: 50%;
+            opacity: 0.9;
+          "></div>
+        </div>
       `,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10],
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
     });
   };
 
@@ -175,8 +205,8 @@ export default function MapTimeline({
     );
   }
 
-  const defaultCenter: [number, number] = [39.8283, -98.5795]; // US Center
-  const defaultZoom = 4;
+  const defaultCenter: [number, number] = [20.5937, 78.9629]; // India Center
+  const defaultZoom = 5;
 
   return (
     <div className="w-full h-full relative">
@@ -217,19 +247,27 @@ export default function MapTimeline({
           <Marker
             key={node.id}
             position={[node.lat, node.lng]}
-            icon={createNodeIcon(node.type)}
+            icon={createNodeIcon(node.type, node)}
           >
             <Popup>
-              <div className="p-2">
-                <h3 className="font-semibold text-lg mb-1">
-                  {getNodeStyle(node.type).emoji} {node.name}
+              <div className="p-3 min-w-[200px]">
+                <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
+                  <span className="text-xl">{getNodeStyle(node.type).emoji}</span>
+                  <span>{node.name}</span>
                 </h3>
-                <p className="text-sm text-gray-600 mb-1">
-                  <span className="font-medium">Type:</span> {node.type}
-                </p>
-                <p className="text-sm text-gray-600 mb-1">
-                  <span className="font-medium">Node ID:</span> {node.nodeId}
-                </p>
+                <div className="space-y-1">
+                  <p className="text-sm text-gray-700">
+                    <span className="font-semibold">Type:</span>{" "}
+                    <span className="capitalize text-gray-800">{node.type}</span>
+                  </p>
+                  <p className="text-sm text-gray-700">
+                    <span className="font-semibold">Node ID:</span>{" "}
+                    <span className="font-mono text-gray-800">{node.nodeId}</span>
+                  </p>
+                  <p className="text-xs text-gray-500 mt-2">
+                    📍 {node.lat.toFixed(4)}, {node.lng.toFixed(4)}
+                  </p>
+                </div>
               </div>
             </Popup>
           </Marker>
@@ -247,23 +285,34 @@ export default function MapTimeline({
               icon={createEventIcon(event.type)}
             >
               <Popup>
-                <div className="p-2">
-                  <h3 className="font-semibold text-lg mb-1">
-                    Event: {event.type.replace(/_/g, " ").toUpperCase()}
+                <div className="p-3 min-w-[200px]">
+                  <h3 className="font-bold text-base mb-2 capitalize">
+                    {event.type.replace(/_/g, " ")}
                   </h3>
-                  <p className="text-sm text-gray-600 mb-1">
-                    <span className="font-medium">Time:</span>{" "}
-                    {event.time.toLocaleTimeString()}
-                  </p>
-                  <p className="text-sm text-gray-600 mb-1">
-                    <span className="font-medium">Event ID:</span>{" "}
-                    {event.eventId}
-                  </p>
-                  {event.payload && (
-                    <div className="text-xs text-gray-500 mt-2">
-                      {JSON.stringify(event.payload, null, 2)}
-                    </div>
-                  )}
+                  <div className="space-y-1">
+                    <p className="text-sm text-gray-700">
+                      <span className="font-semibold">Date:</span>{" "}
+                      <span className="text-gray-800">{event.time.toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}</span>
+                    </p>
+                    <p className="text-sm text-gray-700">
+                      <span className="font-semibold">Event ID:</span>{" "}
+                      <span className="font-mono text-gray-800">{event.eventId}</span>
+                    </p>
+                    {event.payload && (
+                      <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
+                        <span className="font-semibold block mb-1">Details:</span>
+                        <pre className="whitespace-pre-wrap text-xs">
+                          {JSON.stringify(event.payload, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </Popup>
             </Marker>
@@ -302,11 +351,26 @@ export default function MapTimeline({
           100% {
             transform: scale(1);
             opacity: 1;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.4), 0 0 0 2px currentColor;
           }
           50% {
-            transform: scale(1.1);
-            opacity: 0.8;
+            transform: scale(1.15);
+            opacity: 0.9;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5), 0 0 0 4px currentColor;
           }
+        }
+
+        .node-marker:hover {
+          transform: rotate(-45deg) scale(1.1);
+        }
+
+        .leaflet-marker-icon {
+          transition: transform 0.2s ease;
+        }
+
+        .leaflet-marker-icon:hover {
+          transform: scale(1.1);
+          z-index: 1000;
         }
 
         .leaflet-popup-content-wrapper {
