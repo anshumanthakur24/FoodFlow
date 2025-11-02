@@ -21,17 +21,36 @@ MONGO_URI=mongodb://127.0.0.1:27017/arcanix
 MAIN_API_URL=http://localhost:3001
 MAIN_API_FARM_PATH=/api/v1/event/farm
 MAIN_API_REQUEST_CREATE_PATH=/api/v1/request/createRequest
+
+# Both approval and fulfillment use the unified status endpoint
 MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestObjectId}/status
 MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestObjectId}/status
+
 SCENARIO_MAX_BATCH_SIZE=200
 SCENARIO_MIN_INTERVAL_MS=500
+
+# Event probabilities (normalized to sum to 1.0, minimum 1% enforced per type)
 SCENARIO_PROB_FARM=0.65
 SCENARIO_PROB_REQUEST=0.35
 ```
 
 Any unset value falls back to the defaults above.
 
-If your main API exposes separate approve/fulfil endpoints, you can override the templates accordingly. The mock server captures the created request's Mongo `_id` from the creation response and substitutes it into `{requestObjectId}` automatically.
+**Probability Notes:**
+
+- Values are automatically normalized to sum to 1.0
+- If you set `farm: 0.9, request: 0.3`, they'll normalize to `farm: 0.75, request: 0.25`
+- If both are zero or negative, defaults (0.65/0.35) are used
+- Minimum 1% probability is enforced for each type to prevent dead scenarios
+
+If your main API uses separate endpoints for approval/fulfillment instead of the unified `/status` route, override the templates:
+
+```
+MAIN_API_REQUEST_APPROVE_TEMPLATE=/api/v1/request/{requestObjectId}/approve
+MAIN_API_REQUEST_FULFILL_TEMPLATE=/api/v1/request/{requestObjectId}/fulfill
+```
+
+The mock-server auto-detects `/status` in URLs and uses `PATCH`; otherwise it defaults to `POST`.
 
 ## Request Lifecycle
 
