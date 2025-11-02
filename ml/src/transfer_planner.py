@@ -183,13 +183,31 @@ def to_node_info(record: Dict[str, Any]) -> NodeInfo:
     )
     mongo_id = str(raw_id) if raw_id is not None else ""
 
+    raw_type = record.get("type")
+    if isinstance(raw_type, str):
+        cleaned_type = raw_type.strip().lower() or None
+    else:
+        cleaned_type = None
+
+    raw_state = record.get("state")
+    state_value = (
+        raw_state.strip() if isinstance(raw_state, str) and raw_state.strip() else None
+    )
+
+    raw_district = record.get("district")
+    district_value = (
+        raw_district.strip()
+        if isinstance(raw_district, str) and raw_district.strip()
+        else None
+    )
+
     return NodeInfo(
         mongo_id=mongo_id,
         node_id=record.get("nodeId"),
         name=record.get("name"),
-        node_type=(record.get("type") or "").lower() or None,
-        state=record.get("state"),
-        district=record.get("district"),
+        node_type=cleaned_type,
+        state=state_value,
+        district=district_value,
         region_id=record.get("regionId"),
         capacity_kg=capacity_value,
         lat=lat,
