@@ -31,7 +31,7 @@ const sendSimulationData = asyncHandler(async (req, res) => {
       );
     }
 
-    const endpoint = `${baseURL}/predict`;
+    const endpoint = `${baseURL}/transfers/plan`;
 
     // 🟢 Fetch all data from MongoDB
     const [nodes, requests, shipments, batches] = await Promise.all([
@@ -121,7 +121,7 @@ const sendSimulationData = asyncHandler(async (req, res) => {
     }));
 
     const payload = {
-      runId: `RUN-${Date.now()}`,
+      // runId: `RUN-${Date.now()}`,
       freq: "M",
       nodes: formattedNodes,
       requests: formattedRequests,
