@@ -1,5 +1,6 @@
 const { createHash } = require('crypto');
 const seedrandom = require('seedrandom');
+const axios = require('axios');
 const Scenario = require('../models/Scenario');
 const SimEvent = require('../models/SimEvent');
 const CropSeason = require('../models/CropSeason');
@@ -17,11 +18,6 @@ const {
 
 const activeScenarios = new Map();
 
-const fetchApi = (...args) => {
-  if (typeof fetch === 'function') return fetch(...args);
-  return Promise.reject(new Error('fetch unavailable'));
-};
-
 function normalizeBatchSize(value) {
   if (!value || Number.isNaN(Number(value)))
     return Math.min(50, MAX_BATCH_SIZE);
@@ -38,12 +34,26 @@ function normalizeInterval(value) {
 
 function normalizeProbabilities(input) {
   const source = { ...DEFAULT_PROBABILITIES, ...(input || {}) };
-  const farm = Number(source.farm) || 0;
+  const MIN_PROBABILITY = 0.01; // Ensure at least 1% for each type
+
+  let farm = Math.max(0, Number(source.farm) || 0);
   const requestAlias =
     source.request ?? source.ngo ?? source.requests ?? source.aid ?? 0;
-  const request = Number(requestAlias) || 0;
+  let request = Math.max(0, Number(requestAlias) || 0);
+
+  // If both are zero or negative, use defaults
+  if (farm <= 0 && request <= 0) {
+    return { ...DEFAULT_PROBABILITIES };
+  }
+
+  // Ensure minimum values if one is provided
+  if (farm > 0 && request <= 0) {
+    request = MIN_PROBABILITY;
+  } else if (request > 0 && farm <= 0) {
+    farm = MIN_PROBABILITY;
+  }
+
   const total = farm + request;
-  if (!total || total <= 0) return { ...DEFAULT_PROBABILITIES };
   return {
     farm: farm / total,
     request: request / total,
@@ -822,7 +832,18 @@ function createRequestAcceptanceEvent(runtime, ledgerEntry) {
     MAIN_API_ROUTES.requestApproveTemplate,
     ledgerEntry
   );
-  if (!urlPath) return null;
+  if (!urlPath) {
+    console.warn(
+      `[SCENARIO] Failed to build approval URL for requestId ${ledgerEntry.requestId}`
+    );
+    return null;
+  }
+
+  console.log(
+    `[SCENARIO] Creating approval event for ${
+      ledgerEntry.requestId
+    } (mongoId: ${ledgerEntry.mongoId || 'unknown'})`
+  );
 
   const recordPayload = {
     requestId: ledgerEntry.requestId,
@@ -899,7 +920,18 @@ function createRequestFulfilledEvent(runtime, ledgerEntry) {
     MAIN_API_ROUTES.requestFulfillTemplate,
     ledgerEntry
   );
-  if (!urlPath) return null;
+  if (!urlPath) {
+    console.warn(
+      `[SCENARIO] Failed to build fulfillment URL for requestId ${ledgerEntry.requestId}`
+    );
+    return null;
+  }
+
+  console.log(
+    `[SCENARIO] Creating fulfillment event for ${
+      ledgerEntry.requestId
+    } (mongoId: ${ledgerEntry.mongoId || 'unknown'})`
+  );
 
   const recordPayload = {
     requestId: ledgerEntry.requestId,
@@ -945,8 +977,8 @@ function createRequestEvent(
   let requesterNodeId;
   let requesterDetails;
 
-  if (runtime.nodeMode) {
-    if (!runtime.ngoNodes.length) return null;
+  // Try NGO nodes first if in node mode
+  if (runtime.nodeMode && runtime.ngoNodes.length > 0) {
     const node = runtime.ngoNodes[Math.floor(rng() * runtime.ngoNodes.length)];
     requesterDetails = nodeToEmittedFrom(node);
     const candidate =
@@ -960,13 +992,23 @@ function createRequestEvent(
     requesterNodeId = looksLikeObjectId
       ? candidateStr
       : pseudoObjectId(`node:${candidateStr}`);
-  } else {
-    if (!runtime.regions.length) return null;
+  }
+  // Fall back to regions if no NGO nodes available OR not in node mode
+  else if (runtime.regions && runtime.regions.length > 0) {
     const region = runtime.regions[Math.floor(rng() * runtime.regions.length)];
     requesterDetails = regionToRequesterDetails(region);
     requesterNodeId = pseudoObjectId(
       `region:${region.code || region.district || region.name || requestId}`
     );
+  }
+  // No requesters available at all
+  else {
+    console.log(
+      `[SCENARIO]   └─ ERROR: No requesters available (ngoNodes: ${
+        runtime.ngoNodes?.length || 0
+      }, regions: ${runtime.regions?.length || 0})`
+    );
+    return null;
   }
 
   const createdOn = eventTimestamp;
@@ -1025,12 +1067,22 @@ function createRequestEvent(
   runtime.requestLedger.set(requestId, ledgerEntry);
   runtime.openRequests.set(requestId, ledgerEntry);
 
+  console.log(
+    `[SCENARIO] Creating request event: ${requestId} (requester: ${requesterNodeId.slice(
+      0,
+      8
+    )}...)`
+  );
+
   if (rng() < acceptanceChance) {
     const minDays = 1;
     const maxDays = 6;
     const dayOffset = minDays + Math.floor(rng() * (maxDays - minDays + 1));
     const acceptAt = new Date(eventTimestamp.getTime() + dayOffset * 86400000);
     ledgerEntry.acceptAt = acceptAt;
+    console.log(
+      `[SCENARIO]   └─ Will approve in ${dayOffset} days (at ${acceptAt.toISOString()})`
+    );
     const fulfillChance = 0.7;
     if (rng() < fulfillChance) {
       const fulfillCandidate = chooseFulfillmentCandidate(runtime, rng);
@@ -1070,9 +1122,16 @@ function createRequestEvent(
           };
         }
         ledgerEntry.fulfillAt = fulfillAt;
+        console.log(
+          `[SCENARIO]   └─ Will fulfill ~${Math.round(
+            hourOffset
+          )} hours after approval (at ${fulfillAt.toISOString()})`
+        );
       }
     }
     runtime.pendingApprovals.push(ledgerEntry);
+  } else {
+    console.log(`[SCENARIO]   └─ Will NOT be approved (random chance)`);
   }
 
   return {
@@ -1096,9 +1155,19 @@ function collectRequestLifecycleEvents(runtime, tickTimestamp) {
   const ready = [];
 
   if (runtime.pendingApprovals.length) {
+    console.log(
+      `[SCENARIO] Checking ${
+        runtime.pendingApprovals.length
+      } pending approval(s) at ${tickTimestamp.toISOString()}`
+    );
     const waitingApprovals = [];
     for (const entry of runtime.pendingApprovals) {
       if (entry.acceptAt && entry.acceptAt <= tickTimestamp) {
+        console.log(
+          `[SCENARIO]   ✓ Approval ready for ${
+            entry.requestId
+          } (scheduled: ${entry.acceptAt.toISOString()})`
+        );
         const approvalEvent = createRequestAcceptanceEvent(runtime, entry);
         if (approvalEvent) ready.push(approvalEvent);
         runtime.openRequests.delete(entry.requestId);
@@ -1113,9 +1182,19 @@ function collectRequestLifecycleEvents(runtime, tickTimestamp) {
   }
 
   if (runtime.pendingFulfillments.length) {
+    console.log(
+      `[SCENARIO] Checking ${
+        runtime.pendingFulfillments.length
+      } pending fulfillment(s) at ${tickTimestamp.toISOString()}`
+    );
     const waitingFulfillments = [];
     for (const entry of runtime.pendingFulfillments) {
       if (entry.fulfillAt && entry.fulfillAt <= tickTimestamp) {
+        console.log(
+          `[SCENARIO]   ✓ Fulfillment ready for ${
+            entry.requestId
+          } (scheduled: ${entry.fulfillAt.toISOString()})`
+        );
         const fulfillmentEvent = createRequestFulfilledEvent(runtime, entry);
         if (fulfillmentEvent) ready.push(fulfillmentEvent);
       } else {
@@ -1125,6 +1204,14 @@ function collectRequestLifecycleEvents(runtime, tickTimestamp) {
     runtime.pendingFulfillments = waitingFulfillments;
   }
 
+  if (ready.length) {
+    console.log(
+      `[SCENARIO] Generated ${ready.length} lifecycle event(s): ${ready
+        .map((e) => e.type)
+        .join(', ')}`
+    );
+  }
+
   return ready;
 }
 
@@ -1132,6 +1219,17 @@ async function generateEvents(runtime, tickTimestamp) {
   const events = [];
   const lifecycleEvents = collectRequestLifecycleEvents(runtime, tickTimestamp);
   if (lifecycleEvents.length) events.push(...lifecycleEvents);
+
+  console.log(
+    `[SCENARIO] Tick ${runtime.tickIndex}: Generating ${
+      runtime.batchSize
+    } new event(s) (probabilities: farm=${(
+      runtime.probabilities.farm * 100
+    ).toFixed(0)}%, request=${(runtime.probabilities.request * 100).toFixed(
+      0
+    )}%)`
+  );
+
   const baseKey = `${runtime.scenario.seed}:${runtime.scenario._id}:${runtime.tickIndex}`;
   for (let i = 0; i < runtime.batchSize; i += 1) {
     const eventKey = `${baseKey}:${i}`;
@@ -1144,7 +1242,17 @@ async function generateEvents(runtime, tickTimestamp) {
     const farmThreshold = runtime.probabilities.farm || 0;
     const requestThreshold =
       farmThreshold + (runtime.probabilities.request || 0);
+
+    console.log(
+      `[SCENARIO]   Event ${i + 1}/${runtime.batchSize}: roll=${roll.toFixed(
+        3
+      )} (farm<${farmThreshold.toFixed(3)}, request<${requestThreshold.toFixed(
+        3
+      )})`
+    );
+
     if (roll < farmThreshold) {
+      console.log(`[SCENARIO]   └─ Generating farm event`);
       event = await createFarmEvent(
         runtime,
         rng,
@@ -1154,6 +1262,7 @@ async function generateEvents(runtime, tickTimestamp) {
       );
     } else {
       if (roll < requestThreshold) {
+        console.log(`[SCENARIO]   └─ Generating request event`);
         event = createRequestEvent(
           runtime,
           rng,
@@ -1163,6 +1272,7 @@ async function generateEvents(runtime, tickTimestamp) {
         );
       }
       if (!event) {
+        console.log(`[SCENARIO]   └─ Fallback to farm event`);
         event = await createFarmEvent(
           runtime,
           rng,
@@ -1174,6 +1284,19 @@ async function generateEvents(runtime, tickTimestamp) {
     }
     if (event) events.push(event);
   }
+
+  const eventTypeCounts = {};
+  events.forEach((e) => {
+    eventTypeCounts[e.type] = (eventTypeCounts[e.type] || 0) + 1;
+  });
+  console.log(
+    `[SCENARIO] Tick ${runtime.tickIndex} complete: ${
+      events.length
+    } total event(s) - ${Object.entries(eventTypeCounts)
+      .map(([type, count]) => `${type}:${count}`)
+      .join(', ')}`
+  );
+
   return events;
 }
 
@@ -1181,29 +1304,55 @@ async function postJson(url, body, method = 'POST') {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), MAIN_API_TIMEOUT_MS);
   try {
-    const response = await fetchApi(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    let data = null;
-    try {
-      data = await response.clone().json();
-    } catch (_) {
+    if (typeof fetch === 'function') {
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      let data = null;
       try {
-        data = await response.text();
+        data = await response.clone().json();
       } catch (_) {
-        data = null;
+        try {
+          data = await response.text();
+        } catch (_) {
+          data = null;
+        }
       }
+      if (!response.ok) {
+        console.error('Main API error', response.status, data || '');
+      }
+      return { ok: response.ok, status: response.status, data };
     }
-    if (!response.ok) {
-      console.error('Main API error', response.status, data || '');
+
+    const response = await axios({
+      url,
+      method,
+      data: body,
+      headers: { 'Content-Type': 'application/json' },
+      timeout: MAIN_API_TIMEOUT_MS,
+      signal: controller.signal,
+      validateStatus: () => true,
+    });
+
+    const ok = response.status >= 200 && response.status < 300;
+    if (!ok) {
+      console.error('Main API error', response.status, response.data || '');
     }
-    return { ok: response.ok, status: response.status, data };
+    return { ok, status: response.status, data: response.data };
   } catch (err) {
-    console.error('Main API error', err.message);
-    return { ok: false, status: 0, data: null };
+    const status =
+      err.response && err.response.status ? err.response.status : 0;
+    const data = err.response && err.response.data ? err.response.data : null;
+    const aborted =
+      err.name === 'AbortError' ||
+      err.code === 'ABORT_ERR' ||
+      err.code === 'ERR_CANCELED';
+    const message = aborted ? 'Request aborted' : err.message;
+    console.error('Main API error', message, status || '');
+    return { ok: false, status, data };
   } finally {
     clearTimeout(timeout);
   }
@@ -1213,20 +1362,27 @@ async function dispatchEvents(events, runtime) {
   if (!events.length) return;
   for (const event of events) {
     const method = event.apiRequest.method || 'POST';
+    console.log(
+      `[SCENARIO] ${method} ${event.apiRequest.url} (type: ${event.type})`
+    );
     const res = await postJson(
       event.apiRequest.url,
       event.apiRequest.body,
       method
     );
+    if (res.ok) {
+      console.log(`[SCENARIO] ✓ ${event.type} succeeded (${res.status})`);
+    } else {
+      console.error(
+        `[SCENARIO] ✗ ${event.type} failed (${res.status}):`,
+        res.data || ''
+      );
+    }
     if (event.type === 'request' && res && res.ok) {
       try {
         const body = res.data;
-        // Try to extract the created Mongo _id from common API response shapes
         const created =
-          (body && body.data) || // ApiResponse style
-          (body && body.request) ||
-          body ||
-          null;
+          (body && body.data) || (body && body.request) || body || null;
         const mongoId =
           (created && created._id) ||
           (created && created.data && created.data._id) ||
@@ -1235,10 +1391,24 @@ async function dispatchEvents(events, runtime) {
           event.apiRequest.body && event.apiRequest.body.requestId;
         if (mongoId && requestId && runtime && runtime.requestLedger) {
           const entry = runtime.requestLedger.get(requestId);
-          if (entry) entry.mongoId = String(mongoId);
+          if (entry) {
+            entry.mongoId = String(mongoId);
+            console.log(
+              `[SCENARIO] Captured mongoId ${mongoId} for requestId ${requestId}`
+            );
+          }
+        } else if (requestId) {
+          console.warn(
+            `[SCENARIO] Failed to capture mongoId for requestId ${requestId}:`,
+            {
+              mongoId,
+              hasRuntime: !!runtime,
+              hasLedger: !!runtime?.requestLedger,
+            }
+          );
         }
-      } catch (_) {
-        // ignore mapping errors
+      } catch (err) {
+        console.error('[SCENARIO] Error capturing mongoId:', err.message);
       }
     }
   }
@@ -1379,6 +1549,29 @@ function createRuntime(scenario, options) {
   };
 
   runtime.start = async () => {
+    console.log(`[SCENARIO] ═══════════════════════════════════════════════`);
+    console.log(`[SCENARIO] Starting scenario: ${runtime.scenario.name}`);
+    console.log(`[SCENARIO] Seed: ${runtime.scenario.seed}`);
+    console.log(
+      `[SCENARIO] Mode: ${runtime.nodeMode ? 'node-driven' : 'region-based'}`
+    );
+    console.log(`[SCENARIO] Batch size: ${runtime.batchSize} events per tick`);
+    console.log(`[SCENARIO] Interval: ${runtime.intervalMs}ms between ticks`);
+    console.log(
+      `[SCENARIO] Probabilities: farm=${(
+        runtime.probabilities.farm * 100
+      ).toFixed(0)}%, request=${(runtime.probabilities.request * 100).toFixed(
+        0
+      )}%`
+    );
+    console.log(
+      `[SCENARIO] Duration: ${
+        runtime.durationMs
+          ? `${runtime.durationMs / 60000} minutes`
+          : 'unlimited'
+      }`
+    );
+
     if (runtime.nodeMode) {
       // Classify nodes for node-driven simulation
       runtime.farmNodes = runtime.nodes.filter(
@@ -1390,10 +1583,27 @@ function createRuntime(scenario, options) {
       runtime.ngoNodes = runtime.nodes.filter(
         (n) => (n.type || '').toLowerCase() === 'ngo'
       );
+      console.log(
+        `[SCENARIO] Loaded ${runtime.nodes.length} node(s): ${runtime.farmNodes.length} farm, ${runtime.warehouseNodes.length} warehouse, ${runtime.ngoNodes.length} ngo`
+      );
+
+      // Load regions as fallback for request generation if no NGO nodes
+      if (runtime.ngoNodes.length === 0) {
+        runtime.regions = await loadRegions(runtime.regionFilter);
+        runtime.warehouses = await loadWarehouses(runtime.regions);
+        console.log(
+          `[SCENARIO] No NGO nodes provided, loaded ${runtime.regions.length} region(s) as fallback for requests`
+        );
+      }
     } else {
       runtime.regions = await loadRegions(runtime.regionFilter);
       runtime.warehouses = await loadWarehouses(runtime.regions);
+      console.log(
+        `[SCENARIO] Loaded ${runtime.regions.length} region(s) and ${runtime.warehouses.length} warehouse(s)`
+      );
     }
+    console.log(`[SCENARIO] ═══════════════════════════════════════════════`);
+
     runtime.startedAt = Date.now();
     runtime.tickIndex = 0;
     runtime.active = true;

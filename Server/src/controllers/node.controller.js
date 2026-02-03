@@ -288,25 +288,55 @@ const startScenario = asyncHandler(async (req, res) => {
         "⚠️ No NGOs found in the database — continuing without NGOs."
       );
     }
+
     console.log(nodes[0]);
-    const formattedNodes = nodes.map((node, index) => ({
+    const formattedNodes = nodes.map((node) => ({
       nodeId: node._id.toString(),
       name: node.name,
       type: node.type,
       district: node.district,
-      regionId: node.regionId || "Unknown",
+      state: node.state || "Unknown",
       regionId: node.regionId || "Unknown",
       location: node.location,
     }));
 
-    const formattedNGOs = ngos.map((ngo, index) => ({
-      ngoId: ngo._id.toString(),
-      ngoId: ngo._id.toString(),
-      name: ngo.name,
-      address: ngo.address,
-      contact: ngo.contactInfo || {},
-      requestStats: ngo.requestStats,
-    }));
+    // Convert NGOs to node format with type 'ngo'
+    // Parse address to extract district/state if possible, or use placeholder
+    const formattedNGOs = ngos.map((ngo, index) => {
+      // Try to extract location from address (format: "address, district, state")
+      const addressParts = (ngo.address || "").split(",").map((s) => s.trim());
+      const district =
+        addressParts.length >= 2
+          ? addressParts[addressParts.length - 2]
+          : "Delhi";
+      const state =
+        addressParts.length >= 3
+          ? addressParts[addressParts.length - 1]
+          : "Delhi";
+
+      // Generate a placeholder location (you may want to geocode these properly)
+      // Using a random location in India as placeholder
+      const baseLat = 28.6139; // Delhi coordinates as base
+      const baseLon = 77.209;
+      const randomOffset = () => (Math.random() - 0.5) * 5; // ±2.5 degrees variation
+
+      return {
+        nodeId: ngo._id.toString(),
+        name: ngo.name,
+        type: "ngo",
+        district: district,
+        state: state,
+        location: {
+          type: "Point",
+          coordinates: [baseLon + randomOffset(), baseLat + randomOffset()],
+        },
+        contact: ngo.contactInfo || {},
+        requestStats: ngo.requestStats,
+      };
+    });
+
+    // Merge all nodes (farms, warehouses) with NGOs
+    const allNodes = [...formattedNodes, ...formattedNGOs];
 
     const payload = {
       name: "HarvestRun-2",
@@ -314,10 +344,9 @@ const startScenario = asyncHandler(async (req, res) => {
       startDate: "2025-11-01T00:00:00Z",
       batchSize: 20,
       intervalMs: 2000,
-      nodes: formattedNodes,
-      ngos: formattedNGOs,
+      nodes: allNodes,
       durationMinutes: 5,
-      probabilities: { farm: 0.7, shipment: 0.25, ngo: 0.05 },
+      probabilities: { farm: 0.67, request: 0.33 },
     };
 
     const response = await axios.post(endpoint, payload, {
@@ -331,10 +360,11 @@ const startScenario = asyncHandler(async (req, res) => {
         {
           sentNodes: formattedNodes.length,
           sentNGOs: formattedNGOs.length,
+          totalNodesSent: allNodes.length,
           payloadSent: payload,
           externalResponse: response.data,
         },
-        "Scenario started successfully. Nodes and NGOs sent."
+        `Scenario started successfully. Sent ${allNodes.length} nodes (${formattedNodes.length} regular nodes + ${formattedNGOs.length} NGOs).`
       )
     );
   } catch (error) {

@@ -17,6 +17,8 @@ LOGGER = get_logger(__name__)
 
 DEFAULT_MODE = "all"
 RELEVANT_BATCH_STATUSES = {"stored", "reserved"}
+DEFAULT_WAREHOUSE_CAPACITY = 10000.0
+DEFAULT_FARM_CAPACITY = 5000.0
 
 
 @dataclass
@@ -200,6 +202,11 @@ def to_node_info(record: Dict[str, Any]) -> NodeInfo:
         if isinstance(raw_district, str) and raw_district.strip()
         else None
     )
+
+    if cleaned_type == "warehouse" and capacity_value <= 0:
+        capacity_value = DEFAULT_WAREHOUSE_CAPACITY
+    elif cleaned_type == "farm" and capacity_value <= 0:
+        capacity_value = DEFAULT_FARM_CAPACITY
 
     return NodeInfo(
         mongo_id=mongo_id,

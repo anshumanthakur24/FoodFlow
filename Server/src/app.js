@@ -8,13 +8,14 @@ const app = express();
 app.use(cookieParser());
 
 app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "10mb" }));
 app.use(cors());
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 app.use(express.static("public"));
 import { startScenario } from "./controllers/node.controller.js";
 
-// Logger middleware - should be after body parsers but before routes
 app.use(logger);
 
 app.post("/api/v1/startMock", startScenario);
@@ -30,8 +31,7 @@ import shipmentRouter from "./routes/shipment.route.js";
 import historyRouter from "./routes/history.route.js";
 import suggestRouter from "./routes/suggest.route.js";
 
-// Routes Declaration
-app.use("/api/v1/event/", eventRouter); //for recieving the data from the dummy server
+app.use("/api/v1/event/", eventRouter);
 app.use("/api/v1/map", mapRouter);
 app.use("/api/v1/node", nodeRouter);
 app.use("/api/v1/request", requestRouter);

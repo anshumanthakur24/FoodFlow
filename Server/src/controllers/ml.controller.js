@@ -256,8 +256,20 @@ const getData = asyncHandler(async (req, res) => {
     .json(
       new ApiResponse(
         200,
-        response.data,
-        "Transfer plan generated successfully."
+        {
+          plan: response.data,
+          createdShipments: createdShipments.length,
+          shipments: createdShipments.map(s => ({
+            id: s._id,
+            shipmentID: s.shipmentID,
+            fromNode: s.fromNode,
+            toNode: s.toNode,
+            transfer_type: s.transfer_type,
+            suggested_quantity_kg: s.suggested_quantity_kg
+          })),
+          errors: errors.length > 0 ? errors : undefined
+        },
+        `Transfer plan generated successfully. ${createdShipments.length} shipment(s) created.`
       )
     );
 });
