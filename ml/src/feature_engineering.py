@@ -120,8 +120,24 @@ def _normalize_batches(batches_df: pd.DataFrame) -> pd.DataFrame:
     for field in ["current_quantity_kg", "initial_quantity_kg", "freshnessPct", "shelf_life_hours"]:
         if field in batches.columns:
             batches[field] = pd.to_numeric(batches[field], errors="coerce")
+            
+        # 🔒 HARD GUARANTEE REQUIRED COLUMNS EXIST (NO KEYERRORS DOWNSTREAM)
+    required_defaults = {
+        "initial_quantity_kg": 0.0,
+        "current_quantity_kg": 0.0,
+        "freshnessPct": 100.0,
+        "shelf_life_hours": 72.0,
+    }
+
+    for col, default in required_defaults.items():
+        if col not in batches.columns:
+            batches[col] = default
+        else:
+            batches[col] = pd.to_numeric(batches[col], errors="coerce").fillna(default)
+
 
     return batches
+
 
 
 def _prepare_request_features(requests_df: pd.DataFrame, nodes: pd.DataFrame, freq: str) -> pd.DataFrame:
@@ -396,8 +412,31 @@ def _load_income_features(
 
 
 def _merge_blocks(blocks: List[pd.DataFrame]) -> pd.DataFrame:
-    merged = blocks[0]
-    for block in blocks[1:]:
+    def normalize_keys(frame: pd.DataFrame) -> pd.DataFrame:
+        normalized = frame.copy()
+        for col in KEY_COLUMNS:
+            if col not in normalized.columns:
+                normalized[col] = pd.NA
+
+        # Ensure merge keys are consistent across blocks.
+        for col in ("state", "district"):
+            normalized[col] = (
+                normalized[col]
+                .astype("string")
+                .fillna("Unknown")
+                .astype(object)
+            )
+
+        normalized["period_start"] = pd.to_datetime(
+            normalized["period_start"], errors="coerce"
+        )
+
+        return normalized
+
+    normalized_blocks = [normalize_keys(block) for block in blocks]
+
+    merged = normalized_blocks[0]
+    for block in normalized_blocks[1:]:
         merged = merged.merge(block, on=KEY_COLUMNS, how="outer")
     return merged
 

@@ -13,7 +13,7 @@ export interface Node {
   id: string;
   nodeId: string;
   name: string;
-  type: 'farm' | 'warehouse' | 'ngo' | 'processing';
+  type: "farm" | "warehouse" | "ngo" | "processing";
   lat: number;
   lng: number;
 }
@@ -26,7 +26,7 @@ export interface Shipment {
   startTime: Date;
   etaTime?: Date;
   arrivedTime?: Date;
-  status: 'in_transit' | 'arrived' | 'delayed' | 'cancelled';
+  status: "in_transit" | "arrived" | "delayed" | "cancelled";
   fromLat: number;
   fromLng: number;
   toLat: number;
@@ -47,11 +47,50 @@ export interface Event {
   id: string;
   eventId: string;
   time: Date;
-  type: 'farm_production' | 'ngo_request' | 'shipment_created' | 'shipment_arrived' | 'shipment_location_update' | 'batch_spoiled' | 'prediction_made';
+  type:
+    | "farm_production"
+    | "ngo_request"
+    | "shipment_created"
+    | "shipment_arrived"
+    | "shipment_location_update"
+    | "batch_spoiled"
+    | "prediction_made";
   lat: number;
   lng: number;
-  payload: any;
+  payload: unknown;
   shipmentId?: string;
+}
+
+export interface TimelineData {
+  nodes: Node[];
+  shipments: Shipment[];
+  events: Event[];
+  shipmentLocationUpdates: ShipmentLocationUpdate[];
+}
+
+export interface SupplyChainMetrics {
+  shipmentCount: number;
+  lastMileShipmentCount: number;
+  totalDistanceKm: number;
+  avgDistanceKm: number;
+  lastMileDistanceKm: number;
+  avgLastMileDistanceKm: number;
+  avgDurationDays: number;
+}
+
+export interface SupplyChainComparisonData {
+  regular: TimelineData;
+  ml: TimelineData;
+  metrics: {
+    regular: SupplyChainMetrics;
+    ml: SupplyChainMetrics;
+    deltas: {
+      distanceReductionPct: number;
+      lastMileDistanceReductionPct: number;
+      avgDurationReductionPct: number;
+    };
+  };
+  notes: string[];
 }
 
 // Generate complete food supply chain data with shipments and events
@@ -59,7 +98,7 @@ export const generateFoodTimelineData = () => {
   // Start from today and span 30 days forward
   const startTime = new Date();
   startTime.setHours(0, 0, 0, 0); // Set to start of day
-  
+
   // 30 days = 30 * 24 * 60 * 60 * 1000 milliseconds
   const daysDuration = 30;
   const endTime = new Date(startTime);
@@ -68,50 +107,211 @@ export const generateFoodTimelineData = () => {
   // Create nodes (locations) - All in India
   const nodes: Node[] = [
     // Farms in agricultural regions of India
-    { id: 'node-1', nodeId: 'N001', name: 'Punjab Wheat Farm', type: 'farm', lat: 30.9129, lng: 75.7873 }, // Ludhiana, Punjab
-    { id: 'node-2', nodeId: 'N002', name: 'Haryana Rice Farm', type: 'farm', lat: 29.0588, lng: 76.0856 }, // Karnal, Haryana
-    { id: 'node-3', nodeId: 'N003', name: 'Maharashtra Cotton Farm', type: 'farm', lat: 19.0760, lng: 72.8777 }, // Mumbai, Maharashtra
-    { id: 'node-4', nodeId: 'N004', name: 'Karnataka Coffee Farm', type: 'farm', lat: 12.9716, lng: 77.5946 }, // Bangalore, Karnataka
-    { id: 'node-5', nodeId: 'N005', name: 'Tamil Nadu Vegetable Farm', type: 'farm', lat: 13.0827, lng: 80.2707 }, // Chennai, Tamil Nadu
-    { id: 'node-6', nodeId: 'N006', name: 'Uttar Pradesh Sugarcane Farm', type: 'farm', lat: 26.8467, lng: 80.9462 }, // Lucknow, UP
-    { id: 'node-7', nodeId: 'N007', name: 'Gujarat Groundnut Farm', type: 'farm', lat: 23.0225, lng: 72.5714 }, // Ahmedabad, Gujarat
-    
+    {
+      id: "node-1",
+      nodeId: "N001",
+      name: "Punjab Wheat Farm",
+      type: "farm",
+      lat: 30.9129,
+      lng: 75.7873,
+    }, // Ludhiana, Punjab
+    {
+      id: "node-2",
+      nodeId: "N002",
+      name: "Haryana Rice Farm",
+      type: "farm",
+      lat: 29.0588,
+      lng: 76.0856,
+    }, // Karnal, Haryana
+    {
+      id: "node-3",
+      nodeId: "N003",
+      name: "Maharashtra Cotton Farm",
+      type: "farm",
+      lat: 19.076,
+      lng: 72.8777,
+    }, // Mumbai, Maharashtra
+    {
+      id: "node-4",
+      nodeId: "N004",
+      name: "Karnataka Coffee Farm",
+      type: "farm",
+      lat: 12.9716,
+      lng: 77.5946,
+    }, // Bangalore, Karnataka
+    {
+      id: "node-5",
+      nodeId: "N005",
+      name: "Tamil Nadu Vegetable Farm",
+      type: "farm",
+      lat: 13.0827,
+      lng: 80.2707,
+    }, // Chennai, Tamil Nadu
+    {
+      id: "node-6",
+      nodeId: "N006",
+      name: "Uttar Pradesh Sugarcane Farm",
+      type: "farm",
+      lat: 26.8467,
+      lng: 80.9462,
+    }, // Lucknow, UP
+    {
+      id: "node-7",
+      nodeId: "N007",
+      name: "Gujarat Groundnut Farm",
+      type: "farm",
+      lat: 23.0225,
+      lng: 72.5714,
+    }, // Ahmedabad, Gujarat
+
     // Processing Plants
-    { id: 'node-8', nodeId: 'N008', name: 'Delhi Food Processing Unit', type: 'processing', lat: 28.6139, lng: 77.2090 }, // Delhi
-    { id: 'node-9', nodeId: 'N009', name: 'Pune Processing Plant', type: 'processing', lat: 18.5204, lng: 73.8567 }, // Pune, Maharashtra
-    { id: 'node-10', nodeId: 'N010', name: 'Hyderabad Processing Center', type: 'processing', lat: 17.3850, lng: 78.4867 }, // Hyderabad, Telangana
-    { id: 'node-11', nodeId: 'N011', name: 'Kolkata Food Processing', type: 'processing', lat: 22.5726, lng: 88.3639 }, // Kolkata, West Bengal
-    
+    {
+      id: "node-8",
+      nodeId: "N008",
+      name: "Delhi Food Processing Unit",
+      type: "processing",
+      lat: 28.6139,
+      lng: 77.209,
+    }, // Delhi
+    {
+      id: "node-9",
+      nodeId: "N009",
+      name: "Pune Processing Plant",
+      type: "processing",
+      lat: 18.5204,
+      lng: 73.8567,
+    }, // Pune, Maharashtra
+    {
+      id: "node-10",
+      nodeId: "N010",
+      name: "Hyderabad Processing Center",
+      type: "processing",
+      lat: 17.385,
+      lng: 78.4867,
+    }, // Hyderabad, Telangana
+    {
+      id: "node-11",
+      nodeId: "N011",
+      name: "Kolkata Food Processing",
+      type: "processing",
+      lat: 22.5726,
+      lng: 88.3639,
+    }, // Kolkata, West Bengal
+
     // Warehouses
-    { id: 'node-12', nodeId: 'N012', name: 'Mumbai Central Warehouse', type: 'warehouse', lat: 19.0760, lng: 72.8777 }, // Mumbai
-    { id: 'node-13', nodeId: 'N013', name: 'Delhi Distribution Hub', type: 'warehouse', lat: 28.7041, lng: 77.1025 }, // Delhi (Noida area)
-    { id: 'node-14', nodeId: 'N014', name: 'Bangalore Storage Facility', type: 'warehouse', lat: 12.9352, lng: 77.6245 }, // Bangalore
-    { id: 'node-15', nodeId: 'N015', name: 'Chennai Warehouse', type: 'warehouse', lat: 13.0475, lng: 80.2500 }, // Chennai
-    { id: 'node-16', nodeId: 'N016', name: 'Surat Logistics Center', type: 'warehouse', lat: 21.1702, lng: 72.8311 }, // Surat, Gujarat
-    
+    {
+      id: "node-12",
+      nodeId: "N012",
+      name: "Mumbai Central Warehouse",
+      type: "warehouse",
+      lat: 19.076,
+      lng: 72.8777,
+    }, // Mumbai
+    {
+      id: "node-13",
+      nodeId: "N013",
+      name: "Delhi Distribution Hub",
+      type: "warehouse",
+      lat: 28.7041,
+      lng: 77.1025,
+    }, // Delhi (Noida area)
+    {
+      id: "node-14",
+      nodeId: "N014",
+      name: "Bangalore Storage Facility",
+      type: "warehouse",
+      lat: 12.9352,
+      lng: 77.6245,
+    }, // Bangalore
+    {
+      id: "node-15",
+      nodeId: "N015",
+      name: "Chennai Warehouse",
+      type: "warehouse",
+      lat: 13.0475,
+      lng: 80.25,
+    }, // Chennai
+    {
+      id: "node-16",
+      nodeId: "N016",
+      name: "Surat Logistics Center",
+      type: "warehouse",
+      lat: 21.1702,
+      lng: 72.8311,
+    }, // Surat, Gujarat
+
     // NGOs and Community Centers
-    { id: 'node-17', nodeId: 'N017', name: 'Delhi Food Bank NGO', type: 'ngo', lat: 28.5355, lng: 77.3910 }, // Delhi
-    { id: 'node-18', nodeId: 'N018', name: 'Mumbai Community Kitchen', type: 'ngo', lat: 19.2183, lng: 72.9781 }, // Mumbai (Mumbai Suburban)
-    { id: 'node-19', nodeId: 'N019', name: 'Bangalore Seva Foundation', type: 'ngo', lat: 12.9166, lng: 77.6101 }, // Bangalore
-    { id: 'node-20', nodeId: 'N020', name: 'Kolkata Relief Center', type: 'ngo', lat: 22.5448, lng: 88.3426 }, // Kolkata
-    { id: 'node-21', nodeId: 'N021', name: 'Hyderabad Food Distribution', type: 'ngo', lat: 17.3616, lng: 78.4747 }, // Hyderabad
-    { id: 'node-22', nodeId: 'N022', name: 'Chennai Aid Center', type: 'ngo', lat: 13.0674, lng: 80.2376 }, // Chennai
-    { id: 'node-23', nodeId: 'N023', name: 'Jaipur Community Center', type: 'ngo', lat: 26.9124, lng: 75.7873 }, // Jaipur, Rajasthan
+    {
+      id: "node-17",
+      nodeId: "N017",
+      name: "Delhi Food Bank NGO",
+      type: "ngo",
+      lat: 28.5355,
+      lng: 77.391,
+    }, // Delhi
+    {
+      id: "node-18",
+      nodeId: "N018",
+      name: "Mumbai Community Kitchen",
+      type: "ngo",
+      lat: 19.2183,
+      lng: 72.9781,
+    }, // Mumbai (Mumbai Suburban)
+    {
+      id: "node-19",
+      nodeId: "N019",
+      name: "Bangalore Seva Foundation",
+      type: "ngo",
+      lat: 12.9166,
+      lng: 77.6101,
+    }, // Bangalore
+    {
+      id: "node-20",
+      nodeId: "N020",
+      name: "Kolkata Relief Center",
+      type: "ngo",
+      lat: 22.5448,
+      lng: 88.3426,
+    }, // Kolkata
+    {
+      id: "node-21",
+      nodeId: "N021",
+      name: "Hyderabad Food Distribution",
+      type: "ngo",
+      lat: 17.3616,
+      lng: 78.4747,
+    }, // Hyderabad
+    {
+      id: "node-22",
+      nodeId: "N022",
+      name: "Chennai Aid Center",
+      type: "ngo",
+      lat: 13.0674,
+      lng: 80.2376,
+    }, // Chennai
+    {
+      id: "node-23",
+      nodeId: "N023",
+      name: "Jaipur Community Center",
+      type: "ngo",
+      lat: 26.9124,
+      lng: 75.7873,
+    }, // Jaipur, Rajasthan
   ];
 
   const foodItems = [
-    { name: 'Basmati Rice', value: 500 },
-    { name: 'Wheat Flour', value: 1000 },
-    { name: 'Fresh Vegetables', value: 300 },
-    { name: 'Dairy Products (Milk, Paneer)', value: 800 },
-    { name: 'Lentils (Dal)', value: 600 },
-    { name: 'Tomatoes', value: 400 },
-    { name: 'Potatoes', value: 700 },
-    { name: 'Onions', value: 550 },
-    { name: 'Canned Pulses', value: 450 },
-    { name: 'Spices Mix', value: 350 },
-    { name: 'Cooking Oil', value: 650 },
-    { name: 'Sugar', value: 500 },
+    { name: "Basmati Rice", value: 500 },
+    { name: "Wheat Flour", value: 1000 },
+    { name: "Fresh Vegetables", value: 300 },
+    { name: "Dairy Products (Milk, Paneer)", value: 800 },
+    { name: "Lentils (Dal)", value: 600 },
+    { name: "Tomatoes", value: 400 },
+    { name: "Potatoes", value: 700 },
+    { name: "Onions", value: 550 },
+    { name: "Canned Pulses", value: 450 },
+    { name: "Spices Mix", value: 350 },
+    { name: "Cooking Oil", value: 650 },
+    { name: "Sugar", value: 500 },
   ];
 
   const shipments: Shipment[] = [];
@@ -122,10 +322,10 @@ export const generateFoodTimelineData = () => {
 
   // Create shipments between nodes
   // Farm -> Processing (0-5s)
-  const farms = nodes.filter(n => n.type === 'farm');
-  const processing = nodes.filter(n => n.type === 'processing');
-  const warehouses = nodes.filter(n => n.type === 'warehouse');
-  const ngos = nodes.filter(n => n.type === 'ngo');
+  const farms = nodes.filter((n) => n.type === "farm");
+  const processing = nodes.filter((n) => n.type === "processing");
+  const warehouses = nodes.filter((n) => n.type === "warehouse");
+  const ngos = nodes.filter((n) => n.type === "ngo");
 
   // Helper function to create shipment with events
   // startOffsetDays: day offset from start (0 = Day 1, 1 = Day 2, etc.)
@@ -137,20 +337,24 @@ export const generateFoodTimelineData = () => {
     startOffsetDays: number,
     durationDays: number,
     createFarmProduction = false,
-    createNgoRequest = false
+    createNgoRequest = false,
   ) => {
     const millisecondsPerDay = 1000 * 60 * 60 * 24;
-    const shipmentStart = new Date(startTime.getTime() + startOffsetDays * millisecondsPerDay);
-    const shipmentEnd = new Date(shipmentStart.getTime() + durationDays * millisecondsPerDay);
-    
+    const shipmentStart = new Date(
+      startTime.getTime() + startOffsetDays * millisecondsPerDay,
+    );
+    const shipmentEnd = new Date(
+      shipmentStart.getTime() + durationDays * millisecondsPerDay,
+    );
+
     const shipment: Shipment = {
       id: `shipment-${shipmentCounter++}`,
-      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, '0')}`,
+      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, "0")}`,
       fromNodeId: fromNode.id,
       toNodeId: toNode.id,
       startTime: shipmentStart,
       etaTime: shipmentEnd,
-      status: 'in_transit',
+      status: "in_transit",
       fromLat: fromNode.lat,
       fromLng: fromNode.lng,
       toLat: toNode.lat,
@@ -161,12 +365,12 @@ export const generateFoodTimelineData = () => {
     shipments.push(shipment);
 
     // Farm production event
-    if (createFarmProduction && fromNode.type === 'farm') {
+    if (createFarmProduction && fromNode.type === "farm") {
       events.push({
         id: `event-${eventCounter++}`,
-        eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+        eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
         time: new Date(shipmentStart.getTime() - 0.5 * millisecondsPerDay),
-        type: 'farm_production',
+        type: "farm_production",
         lat: fromNode.lat,
         lng: fromNode.lng,
         payload: { foodItem: foodItem.name, quantity: foodItem.value },
@@ -174,12 +378,12 @@ export const generateFoodTimelineData = () => {
     }
 
     // NGO request event
-    if (createNgoRequest && toNode.type === 'ngo') {
+    if (createNgoRequest && toNode.type === "ngo") {
       events.push({
         id: `event-${eventCounter++}`,
-        eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+        eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
         time: new Date(shipmentStart.getTime() - 0.5 * millisecondsPerDay),
-        type: 'ngo_request',
+        type: "ngo_request",
         lat: toNode.lat,
         lng: toNode.lng,
         payload: { ngo: toNode.name, requestedFood: foodItem.name },
@@ -189,19 +393,26 @@ export const generateFoodTimelineData = () => {
     // Shipment created event
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentStart,
-      type: 'shipment_created',
+      type: "shipment_created",
       lat: fromNode.lat,
       lng: fromNode.lng,
-      payload: { shipmentId: shipment.shipmentId, fromNode: fromNode.name, toNode: toNode.name },
+      payload: {
+        shipmentId: shipment.shipmentId,
+        fromNode: fromNode.name,
+        toNode: toNode.name,
+      },
       shipmentId: shipment.id,
     });
 
     // Location updates - generate updates throughout the shipment duration
     const numUpdates = Math.max(8, Math.floor(durationDays * 2)); // At least 8 updates, or 2 per day
     for (let i = 1; i <= numUpdates; i++) {
-      const updateTime = new Date(shipmentStart.getTime() + (durationDays * millisecondsPerDay * i) / (numUpdates + 1));
+      const updateTime = new Date(
+        shipmentStart.getTime() +
+          (durationDays * millisecondsPerDay * i) / (numUpdates + 1),
+      );
       const progress = i / (numUpdates + 1);
       const lat = fromNode.lat + (toNode.lat - fromNode.lat) * progress;
       const lng = fromNode.lng + (toNode.lng - fromNode.lng) * progress;
@@ -216,12 +427,15 @@ export const generateFoodTimelineData = () => {
 
       events.push({
         id: `event-${eventCounter++}`,
-        eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+        eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
         time: updateTime,
-        type: 'shipment_location_update',
+        type: "shipment_location_update",
         lat,
         lng,
-        payload: { shipmentId: shipment.shipmentId, progress: Math.round(progress * 100) },
+        payload: {
+          shipmentId: shipment.shipmentId,
+          progress: Math.round(progress * 100),
+        },
         shipmentId: shipment.id,
       });
     }
@@ -229,17 +443,17 @@ export const generateFoodTimelineData = () => {
     // Shipment arrived event
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentEnd,
-      type: 'shipment_arrived',
+      type: "shipment_arrived",
       lat: toNode.lat,
       lng: toNode.lng,
       payload: { shipmentId: shipment.shipmentId },
       shipmentId: shipment.id,
     });
-    
+
     shipment.arrivedTime = shipmentEnd;
-    shipment.status = 'arrived';
+    shipment.status = "arrived";
   };
 
   // Shipment 1: Farm to Processing (starts at Day 1, duration 3 days)
@@ -248,18 +462,20 @@ export const generateFoodTimelineData = () => {
     const plant = processing[0];
     const foodItem = foodItems[0];
     const millisecondsPerDay = 1000 * 60 * 60 * 24;
-    const shipmentStart = new Date(startTime.getTime() + 0 * millisecondsPerDay); // Day 1
+    const shipmentStart = new Date(
+      startTime.getTime() + 0 * millisecondsPerDay,
+    ); // Day 1
     const shipmentDuration = 3 * millisecondsPerDay; // 3 days
     const shipmentEnd = new Date(shipmentStart.getTime() + shipmentDuration);
-    
+
     const shipment: Shipment = {
       id: `shipment-${shipmentCounter++}`,
-      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, '0')}`,
+      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, "0")}`,
       fromNodeId: farm.id,
       toNodeId: plant.id,
       startTime: shipmentStart,
       etaTime: shipmentEnd,
-      status: 'in_transit',
+      status: "in_transit",
       fromLat: farm.lat,
       fromLng: farm.lng,
       toLat: plant.lat,
@@ -272,21 +488,25 @@ export const generateFoodTimelineData = () => {
     // Create shipment_created event
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentStart,
-      type: 'shipment_created',
+      type: "shipment_created",
       lat: farm.lat,
       lng: farm.lng,
-      payload: { shipmentId: shipment.shipmentId, fromNode: farm.name, toNode: plant.name },
+      payload: {
+        shipmentId: shipment.shipmentId,
+        fromNode: farm.name,
+        toNode: plant.name,
+      },
       shipmentId: shipment.id,
     });
 
     // Create farm_production event (before shipment starts)
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: new Date(startTime.getTime() - 0.5 * millisecondsPerDay), // Half day before shipment
-      type: 'farm_production',
+      type: "farm_production",
       lat: farm.lat,
       lng: farm.lng,
       payload: { foodItem: foodItem.name, quantity: foodItem.value },
@@ -295,7 +515,9 @@ export const generateFoodTimelineData = () => {
     // Generate location updates along the path (updates every few hours during transit)
     const numUpdates = 8; // More updates for multi-day shipments
     for (let i = 1; i <= numUpdates; i++) {
-      const updateTime = new Date(shipmentStart.getTime() + (shipmentDuration * i) / (numUpdates + 1));
+      const updateTime = new Date(
+        shipmentStart.getTime() + (shipmentDuration * i) / (numUpdates + 1),
+      );
       const progress = i / (numUpdates + 1);
       const lat = farm.lat + (plant.lat - farm.lat) * progress;
       const lng = farm.lng + (plant.lng - farm.lng) * progress;
@@ -310,12 +532,15 @@ export const generateFoodTimelineData = () => {
 
       events.push({
         id: `event-${eventCounter++}`,
-        eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+        eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
         time: updateTime,
-        type: 'shipment_location_update',
+        type: "shipment_location_update",
         lat,
         lng,
-        payload: { shipmentId: shipment.shipmentId, progress: Math.round(progress * 100) },
+        payload: {
+          shipmentId: shipment.shipmentId,
+          progress: Math.round(progress * 100),
+        },
         shipmentId: shipment.id,
       });
     }
@@ -323,16 +548,16 @@ export const generateFoodTimelineData = () => {
     // Create shipment_arrived event
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentEnd,
-      type: 'shipment_arrived',
+      type: "shipment_arrived",
       lat: plant.lat,
       lng: plant.lng,
       payload: { shipmentId: shipment.shipmentId },
       shipmentId: shipment.id,
     });
     shipment.arrivedTime = shipmentEnd;
-    shipment.status = 'arrived';
+    shipment.status = "arrived";
   }
 
   // Shipment 2: Processing to Warehouse (starts at Day 5, duration 4 days)
@@ -341,18 +566,20 @@ export const generateFoodTimelineData = () => {
     const warehouse = warehouses[0];
     const foodItem = foodItems[2];
     const millisecondsPerDay = 1000 * 60 * 60 * 24;
-    const shipmentStart = new Date(startTime.getTime() + 4 * millisecondsPerDay); // Day 5 (after shipment 1 arrives)
+    const shipmentStart = new Date(
+      startTime.getTime() + 4 * millisecondsPerDay,
+    ); // Day 5 (after shipment 1 arrives)
     const shipmentDuration = 4 * millisecondsPerDay; // 4 days
     const shipmentEnd = new Date(shipmentStart.getTime() + shipmentDuration);
-    
+
     const shipment: Shipment = {
       id: `shipment-${shipmentCounter++}`,
-      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, '0')}`,
+      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, "0")}`,
       fromNodeId: plant.id,
       toNodeId: warehouse.id,
       startTime: shipmentStart,
       etaTime: shipmentEnd,
-      status: 'in_transit',
+      status: "in_transit",
       fromLat: plant.lat,
       fromLng: plant.lng,
       toLat: warehouse.lat,
@@ -364,19 +591,25 @@ export const generateFoodTimelineData = () => {
 
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentStart,
-      type: 'shipment_created',
+      type: "shipment_created",
       lat: plant.lat,
       lng: plant.lng,
-      payload: { shipmentId: shipment.shipmentId, fromNode: plant.name, toNode: warehouse.name },
+      payload: {
+        shipmentId: shipment.shipmentId,
+        fromNode: plant.name,
+        toNode: warehouse.name,
+      },
       shipmentId: shipment.id,
     });
 
     // Location updates
     const numUpdates = 10; // More updates for multi-day shipments
     for (let i = 1; i <= numUpdates; i++) {
-      const updateTime = new Date(shipmentStart.getTime() + (shipmentDuration * i) / (numUpdates + 1));
+      const updateTime = new Date(
+        shipmentStart.getTime() + (shipmentDuration * i) / (numUpdates + 1),
+      );
       const progress = i / (numUpdates + 1);
       const lat = plant.lat + (warehouse.lat - plant.lat) * progress;
       const lng = plant.lng + (warehouse.lng - plant.lng) * progress;
@@ -391,28 +624,31 @@ export const generateFoodTimelineData = () => {
 
       events.push({
         id: `event-${eventCounter++}`,
-        eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+        eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
         time: updateTime,
-        type: 'shipment_location_update',
+        type: "shipment_location_update",
         lat,
         lng,
-        payload: { shipmentId: shipment.shipmentId, progress: Math.round(progress * 100) },
+        payload: {
+          shipmentId: shipment.shipmentId,
+          progress: Math.round(progress * 100),
+        },
         shipmentId: shipment.id,
       });
     }
 
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentEnd,
-      type: 'shipment_arrived',
+      type: "shipment_arrived",
       lat: warehouse.lat,
       lng: warehouse.lng,
       payload: { shipmentId: shipment.shipmentId },
       shipmentId: shipment.id,
     });
     shipment.arrivedTime = shipmentEnd;
-    shipment.status = 'arrived';
+    shipment.status = "arrived";
   }
 
   // Shipment 3: Warehouse to NGO (starts at Day 11, duration 5 days)
@@ -421,18 +657,20 @@ export const generateFoodTimelineData = () => {
     const ngo = ngos[0];
     const foodItem = foodItems[1];
     const millisecondsPerDay = 1000 * 60 * 60 * 24;
-    const shipmentStart = new Date(startTime.getTime() + 10 * millisecondsPerDay); // Day 11 (after shipment 2 arrives)
+    const shipmentStart = new Date(
+      startTime.getTime() + 10 * millisecondsPerDay,
+    ); // Day 11 (after shipment 2 arrives)
     const shipmentDuration = 5 * millisecondsPerDay; // 5 days
     const shipmentEnd = new Date(shipmentStart.getTime() + shipmentDuration);
-    
+
     const shipment: Shipment = {
       id: `shipment-${shipmentCounter++}`,
-      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, '0')}`,
+      shipmentId: `SH${String(shipmentCounter - 1).padStart(3, "0")}`,
       fromNodeId: warehouse.id,
       toNodeId: ngo.id,
       startTime: shipmentStart,
       etaTime: shipmentEnd,
-      status: 'in_transit',
+      status: "in_transit",
       fromLat: warehouse.lat,
       fromLng: warehouse.lng,
       toLat: ngo.lat,
@@ -444,21 +682,25 @@ export const generateFoodTimelineData = () => {
 
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentStart,
-      type: 'shipment_created',
+      type: "shipment_created",
       lat: warehouse.lat,
       lng: warehouse.lng,
-      payload: { shipmentId: shipment.shipmentId, fromNode: warehouse.name, toNode: ngo.name },
+      payload: {
+        shipmentId: shipment.shipmentId,
+        fromNode: warehouse.name,
+        toNode: ngo.name,
+      },
       shipmentId: shipment.id,
     });
 
     // Create NGO request event before shipment
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: new Date(shipmentStart.getTime() - 0.5 * millisecondsPerDay), // Half day before shipment
-      type: 'ngo_request',
+      type: "ngo_request",
       lat: ngo.lat,
       lng: ngo.lng,
       payload: { ngo: ngo.name, requestedFood: foodItem.name },
@@ -467,7 +709,9 @@ export const generateFoodTimelineData = () => {
     // Location updates
     const numUpdates = 12; // More updates for multi-day shipments
     for (let i = 1; i <= numUpdates; i++) {
-      const updateTime = new Date(shipmentStart.getTime() + (shipmentDuration * i) / (numUpdates + 1));
+      const updateTime = new Date(
+        shipmentStart.getTime() + (shipmentDuration * i) / (numUpdates + 1),
+      );
       const progress = i / (numUpdates + 1);
       const lat = warehouse.lat + (ngo.lat - warehouse.lat) * progress;
       const lng = warehouse.lng + (ngo.lng - warehouse.lng) * progress;
@@ -482,28 +726,31 @@ export const generateFoodTimelineData = () => {
 
       events.push({
         id: `event-${eventCounter++}`,
-        eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+        eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
         time: updateTime,
-        type: 'shipment_location_update',
+        type: "shipment_location_update",
         lat,
         lng,
-        payload: { shipmentId: shipment.shipmentId, progress: Math.round(progress * 100) },
+        payload: {
+          shipmentId: shipment.shipmentId,
+          progress: Math.round(progress * 100),
+        },
         shipmentId: shipment.id,
       });
     }
 
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: shipmentEnd,
-      type: 'shipment_arrived',
+      type: "shipment_arrived",
       lat: ngo.lat,
       lng: ngo.lng,
       payload: { shipmentId: shipment.shipmentId },
       shipmentId: shipment.id,
     });
     shipment.arrivedTime = shipmentEnd;
-    shipment.status = 'arrived';
+    shipment.status = "arrived";
   }
 
   // Shipment 4: Farm 2 to Processing 2 (starts at Day 2, duration 3 days)
@@ -526,9 +773,9 @@ export const generateFoodTimelineData = () => {
   if (farms.length > 2) {
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: new Date(startTime.getTime() + 3 * millisecondsPerDay), // Day 3
-      type: 'farm_production',
+      type: "farm_production",
       lat: farms[2].lat,
       lng: farms[2].lng,
       payload: { foodItem: foodItems[6].name, quantity: foodItems[6].value },
@@ -538,9 +785,9 @@ export const generateFoodTimelineData = () => {
   if (farms.length > 3) {
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: new Date(startTime.getTime() + 4 * millisecondsPerDay), // Day 4
-      type: 'farm_production',
+      type: "farm_production",
       lat: farms[3].lat,
       lng: farms[3].lng,
       payload: { foodItem: foodItems[7].name, quantity: foodItems[7].value },
@@ -551,9 +798,9 @@ export const generateFoodTimelineData = () => {
   if (ngos.length > 2) {
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: new Date(startTime.getTime() + 7 * millisecondsPerDay), // Day 7
-      type: 'ngo_request',
+      type: "ngo_request",
       lat: ngos[2].lat,
       lng: ngos[2].lng,
       payload: { ngo: ngos[2].name, requestedFood: foodItems[8].name },
@@ -563,9 +810,9 @@ export const generateFoodTimelineData = () => {
   if (ngos.length > 3) {
     events.push({
       id: `event-${eventCounter++}`,
-      eventId: `EVT${String(eventCounter - 1).padStart(4, '0')}`,
+      eventId: `EVT${String(eventCounter - 1).padStart(4, "0")}`,
       time: new Date(startTime.getTime() + 13 * millisecondsPerDay), // Day 13
-      type: 'ngo_request',
+      type: "ngo_request",
       lat: ngos[3].lat,
       lng: ngos[3].lng,
       payload: { ngo: ngos[3].name, requestedFood: foodItems[9].name },
@@ -693,7 +940,7 @@ export const generateFoodTimelineData = () => {
   }
 
   // Additional shipments for better coverage across India
-  
+
   // Shipment 31: Farm 3 to Processing 1 (starts at 6s, duration 4s) - North to North
   if (farms.length > 2 && processing.length > 0) {
     createShipment(farms[2], processing[0], foodItems[0], 6, 4, true);
@@ -798,25 +1045,343 @@ export const generateFoodTimelineData = () => {
     nodes,
     shipments,
     events: events.sort((a, b) => a.time.getTime() - b.time.getTime()),
-    shipmentLocationUpdates: shipmentLocationUpdates.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime()),
+    shipmentLocationUpdates: shipmentLocationUpdates.sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    ),
   };
 };
 
 // Keep the old function for backward compatibility
 export const generateSampleFoodData = (): FoodDataPoint[] => {
-  const { nodes, events } = generateFoodTimelineData();
-  
-  return events.map((event, index) => ({
+  const { events } = generateFoodTimelineData();
+
+  return events.map((event) => ({
     id: event.id,
     name: `Event: ${event.type}`,
     lat: event.lat,
     lng: event.lng,
     timestamp: event.time,
-    category: event.type.includes('farm') ? 'origin' : 
-              event.type.includes('processing') ? 'production' :
-              event.type.includes('warehouse') ? 'distribution' : 'consumption',
+    category: event.type.includes("farm")
+      ? "origin"
+      : event.type.includes("processing")
+        ? "production"
+        : event.type.includes("warehouse")
+          ? "distribution"
+          : "consumption",
     description: `Event: ${event.type} at ${new Date(event.time).toLocaleTimeString()}`,
     value: 100,
   }));
 };
 
+const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+function haversineKm(
+  lat1: number,
+  lng1: number,
+  lat2: number,
+  lng2: number,
+): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371; // km
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function round1(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+function cloneTimelineData(data: TimelineData): TimelineData {
+  return {
+    nodes: data.nodes.map((n) => ({ ...n })),
+    shipments: data.shipments.map((s) => ({
+      ...s,
+      startTime: new Date(s.startTime),
+      etaTime: s.etaTime ? new Date(s.etaTime) : undefined,
+      arrivedTime: s.arrivedTime ? new Date(s.arrivedTime) : undefined,
+    })),
+    events: data.events.map((e) => ({
+      ...e,
+      time: new Date(e.time),
+      payload: e.payload,
+    })),
+    shipmentLocationUpdates: data.shipmentLocationUpdates.map((u) => ({
+      ...u,
+      timestamp: new Date(u.timestamp),
+    })),
+  };
+}
+
+function computeMetrics(data: TimelineData): SupplyChainMetrics {
+  const nodeById = new Map<string, Node>(data.nodes.map((n) => [n.id, n]));
+  const isLastMile = (s: Shipment) => {
+    const from = nodeById.get(s.fromNodeId);
+    const to = nodeById.get(s.toNodeId);
+    return from?.type === "warehouse" && to?.type === "ngo";
+  };
+
+  const distances = data.shipments.map((s) =>
+    haversineKm(s.fromLat, s.fromLng, s.toLat, s.toLng),
+  );
+  const lastMileDistances = data.shipments
+    .filter(isLastMile)
+    .map((s) => haversineKm(s.fromLat, s.fromLng, s.toLat, s.toLng));
+
+  const durationsDays = data.shipments.map((s) => {
+    const end = s.arrivedTime || s.etaTime;
+    if (!end) return 0;
+    return (end.getTime() - s.startTime.getTime()) / MS_PER_DAY;
+  });
+
+  const sum = (arr: number[]) => arr.reduce((acc, v) => acc + v, 0);
+  const totalDistanceKm = sum(distances);
+  const lastMileDistanceKm = sum(lastMileDistances);
+  const avgDistanceKm = distances.length
+    ? totalDistanceKm / distances.length
+    : 0;
+  const avgLastMileDistanceKm = lastMileDistances.length
+    ? lastMileDistanceKm / lastMileDistances.length
+    : 0;
+  const avgDurationDays = durationsDays.length
+    ? sum(durationsDays) / durationsDays.length
+    : 0;
+
+  return {
+    shipmentCount: data.shipments.length,
+    lastMileShipmentCount: lastMileDistances.length,
+    totalDistanceKm: round1(totalDistanceKm),
+    avgDistanceKm: round1(avgDistanceKm),
+    lastMileDistanceKm: round1(lastMileDistanceKm),
+    avgLastMileDistanceKm: round1(avgLastMileDistanceKm),
+    avgDurationDays: round1(avgDurationDays),
+  };
+}
+
+function updateShipmentPathAndTiming(
+  data: TimelineData,
+  shipmentId: string,
+  updates: {
+    fromNode?: Node;
+    toNode?: Node;
+    endTime?: Date;
+  },
+) {
+  const nodeById = new Map<string, Node>(data.nodes.map((n) => [n.id, n]));
+  const shipment = data.shipments.find((s) => s.id === shipmentId);
+  if (!shipment) return;
+
+  const fromNode = updates.fromNode ?? nodeById.get(shipment.fromNodeId);
+  const toNode = updates.toNode ?? nodeById.get(shipment.toNodeId);
+  if (!fromNode || !toNode) return;
+
+  const originalEnd = shipment.arrivedTime || shipment.etaTime;
+  const newEnd = updates.endTime ?? originalEnd;
+
+  shipment.fromNodeId = fromNode.id;
+  shipment.toNodeId = toNode.id;
+  shipment.fromLat = fromNode.lat;
+  shipment.fromLng = fromNode.lng;
+  shipment.toLat = toNode.lat;
+  shipment.toLng = toNode.lng;
+
+  if (newEnd) {
+    shipment.etaTime = new Date(newEnd);
+    shipment.arrivedTime = new Date(newEnd);
+  }
+
+  // Update shipment_created event
+  const createdEvent = data.events.find(
+    (e) => e.type === "shipment_created" && e.shipmentId === shipmentId,
+  );
+  if (createdEvent) {
+    createdEvent.lat = fromNode.lat;
+    createdEvent.lng = fromNode.lng;
+    if (createdEvent.payload && typeof createdEvent.payload === "object") {
+      createdEvent.payload = {
+        ...createdEvent.payload,
+        fromNode: fromNode.name,
+        toNode: toNode.name,
+      };
+    }
+  }
+
+  // Update shipment_arrived event
+  const arrivedEvent = data.events.find(
+    (e) => e.type === "shipment_arrived" && e.shipmentId === shipmentId,
+  );
+  if (arrivedEvent) {
+    arrivedEvent.lat = toNode.lat;
+    arrivedEvent.lng = toNode.lng;
+    if (newEnd) arrivedEvent.time = new Date(newEnd);
+  }
+
+  // Recompute location updates for this shipment
+  const updatesForShipment = data.shipmentLocationUpdates
+    .filter((u) => u.shipmentId === shipmentId)
+    .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+  const numUpdates = updatesForShipment.length;
+
+  const start = shipment.startTime.getTime();
+  const end = (
+    shipment.arrivedTime ||
+    shipment.etaTime ||
+    shipment.startTime
+  ).getTime();
+  for (let i = 0; i < numUpdates; i++) {
+    const progress = (i + 1) / (numUpdates + 1);
+    const lat = fromNode.lat + (toNode.lat - fromNode.lat) * progress;
+    const lng = fromNode.lng + (toNode.lng - fromNode.lng) * progress;
+    const t = new Date(start + (end - start) * progress);
+
+    updatesForShipment[i].lat = lat;
+    updatesForShipment[i].lng = lng;
+    updatesForShipment[i].timestamp = t;
+  }
+
+  // Update location update events to match recomputed points/times
+  const locationEvents = data.events
+    .filter(
+      (e) =>
+        e.type === "shipment_location_update" && e.shipmentId === shipmentId,
+    )
+    .sort((a, b) => a.time.getTime() - b.time.getTime());
+
+  const m = Math.min(locationEvents.length, updatesForShipment.length);
+  for (let i = 0; i < m; i++) {
+    locationEvents[i].lat = updatesForShipment[i].lat;
+    locationEvents[i].lng = updatesForShipment[i].lng;
+    locationEvents[i].time = new Date(updatesForShipment[i].timestamp);
+  }
+}
+
+function pctReduction(from: number, to: number): number {
+  if (from <= 0) return 0;
+  return Math.round(((from - to) / from) * 1000) / 10;
+}
+
+/**
+ * Generates two timelines from the same base sample:
+ * - regular: baseline sample routes/timings
+ * - ml: optimized last-mile routing (nearest warehouse) + faster last-mile transit
+ */
+export const generateFoodTimelineComparisonData =
+  (): SupplyChainComparisonData => {
+    const base = generateFoodTimelineData() as TimelineData;
+
+    const regular = cloneTimelineData(base);
+    const ml = cloneTimelineData(base);
+
+    const nodeById = new Map<string, Node>(base.nodes.map((n) => [n.id, n]));
+    const warehouses = base.nodes.filter((n) => n.type === "warehouse");
+
+    const isLastMile = (s: Shipment) => {
+      const from = nodeById.get(s.fromNodeId);
+      const to = nodeById.get(s.toNodeId);
+      return from?.type === "warehouse" && to?.type === "ngo";
+    };
+
+    // Regular: add a bit of real-world friction for the longest last-mile routes
+    const lastMileRegular = regular.shipments
+      .filter(isLastMile)
+      .map((s) => ({
+        id: s.id,
+        distanceKm: haversineKm(s.fromLat, s.fromLng, s.toLat, s.toLng),
+      }))
+      .sort((a, b) => b.distanceKm - a.distanceKm);
+
+    const delayedCount = Math.max(1, Math.floor(lastMileRegular.length * 0.2));
+    for (const s of lastMileRegular.slice(0, delayedCount)) {
+      const shipment = regular.shipments.find((x) => x.id === s.id);
+      if (!shipment) continue;
+      const end = shipment.arrivedTime || shipment.etaTime;
+      if (!end) continue;
+      const delayedEnd = new Date(end.getTime() + 0.75 * MS_PER_DAY);
+      shipment.status = "delayed";
+      updateShipmentPathAndTiming(regular, shipment.id, {
+        endTime: delayedEnd,
+      });
+    }
+
+    // ML: optimize last-mile routes by choosing the nearest warehouse to each NGO
+    for (const shipment of ml.shipments.filter(isLastMile)) {
+      const ngoNode = nodeById.get(shipment.toNodeId);
+      if (!ngoNode) continue;
+
+      let bestWarehouse: Node | null = null;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (const wh of warehouses) {
+        const d = haversineKm(wh.lat, wh.lng, ngoNode.lat, ngoNode.lng);
+        if (d < bestDistance) {
+          bestDistance = d;
+          bestWarehouse = wh;
+        }
+      }
+      if (!bestWarehouse) continue;
+
+      const currentEnd = shipment.arrivedTime || shipment.etaTime;
+      const durationMs = currentEnd
+        ? currentEnd.getTime() - shipment.startTime.getTime()
+        : 0;
+
+      // Faster last-mile delivery (better routing + consolidation)
+      const speedFactor = 0.75;
+      const newEnd = currentEnd
+        ? new Date(shipment.startTime.getTime() + durationMs * speedFactor)
+        : undefined;
+
+      shipment.status = "arrived";
+      updateShipmentPathAndTiming(ml, shipment.id, {
+        fromNode: bestWarehouse,
+        toNode: ngoNode,
+        endTime: newEnd,
+      });
+    }
+
+    // Ensure consistent ordering
+    regular.events.sort((a, b) => a.time.getTime() - b.time.getTime());
+    regular.shipmentLocationUpdates.sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+    ml.events.sort((a, b) => a.time.getTime() - b.time.getTime());
+    ml.shipmentLocationUpdates.sort(
+      (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
+    );
+
+    const regularMetrics = computeMetrics(regular);
+    const mlMetrics = computeMetrics(ml);
+
+    return {
+      regular,
+      ml,
+      metrics: {
+        regular: regularMetrics,
+        ml: mlMetrics,
+        deltas: {
+          distanceReductionPct: pctReduction(
+            regularMetrics.totalDistanceKm,
+            mlMetrics.totalDistanceKm,
+          ),
+          lastMileDistanceReductionPct: pctReduction(
+            regularMetrics.lastMileDistanceKm,
+            mlMetrics.lastMileDistanceKm,
+          ),
+          avgDurationReductionPct: pctReduction(
+            regularMetrics.avgDurationDays,
+            mlMetrics.avgDurationDays,
+          ),
+        },
+      },
+      notes: [
+        "ML optimization here focuses on last-mile: nearest-warehouse routing + faster transit assumptions.",
+        "Regular includes simulated real-world delays on the longest last-mile routes.",
+      ],
+    };
+  };

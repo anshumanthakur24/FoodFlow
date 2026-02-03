@@ -88,7 +88,7 @@ class AdminService {
   async getAllRequests(
     page: number = 1,
     limit: number = 100,
-    status?: string
+    status?: string,
   ): Promise<GoodsRequest[]> {
     try {
       const params = new URLSearchParams({
@@ -101,7 +101,7 @@ class AdminService {
       }
 
       const response = await fetch(
-        `${this.baseUrl}/request/all?${params.toString()}`
+        `${this.baseUrl}/request/all?${params.toString()}`,
       );
 
       // If endpoint doesn't exist, return empty array for now
@@ -128,7 +128,7 @@ class AdminService {
   async getRequestsByNGO(
     ngoId: string,
     page: number = 1,
-    limit: number = 100
+    limit: number = 100,
   ): Promise<GoodsRequest[]> {
     try {
       const params = new URLSearchParams({
@@ -137,7 +137,7 @@ class AdminService {
       });
 
       const response = await fetch(
-        `${this.baseUrl}/request/getAllRequets/${ngoId}?${params.toString()}`
+        `${this.baseUrl}/request/getAllRequets/${ngoId}?${params.toString()}`,
       );
 
       // Handle 404 (no requests found) as empty list
@@ -163,7 +163,7 @@ class AdminService {
   async updateRequestStatus(
     requestId: string,
     status: "approved" | "fulfilled" | "cancelled",
-    additionalData?: Partial<UpdateRequestStatusPayload>
+    additionalData?: Partial<UpdateRequestStatusPayload>,
   ): Promise<GoodsRequest> {
     try {
       console.log("=== Admin Service: updateRequestStatus called ===");
@@ -210,7 +210,7 @@ class AdminService {
           const text = await response.text();
           console.error("Error response text:", text);
           throw new Error(
-            `Server returned ${response.status}: ${response.statusText}`
+            `Server returned ${response.status}: ${response.statusText}`,
           );
         }
       }
@@ -225,6 +225,84 @@ class AdminService {
       throw error;
     }
   }
+
+  /**
+   * Compare ML vs Regular allocation strategies
+   */
+  async compareAllocations(date?: string): Promise<ComparisonResult> {
+    try {
+      const params = new URLSearchParams();
+      if (date) {
+        params.append("date", date);
+      }
+
+      const url = `${API_BASE_URL}/api/history/compare?${params.toString()}`;
+      console.log("🔍 Fetching comparison from:", url);
+
+      const response = await fetch(url);
+
+      console.log("📡 Response status:", response.status);
+      console.log("📡 Response ok:", response.ok);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ API Error:", errorText);
+        throw new Error(
+          `Failed to fetch comparison data: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const result = await response.json();
+      console.log("✅ Received data:", result);
+      return result.data;
+    } catch (error) {
+      console.error("❌ Error fetching comparison data:", error);
+      throw error;
+    }
+  }
+}
+
+export interface ComparisonResult {
+  date: string;
+  regular: {
+    allocations: Allocation[];
+    metrics: AllocationMetrics;
+  };
+  ml: {
+    allocations: Allocation[];
+    metrics: AllocationMetrics;
+  };
+  improvements: {
+    fulfillmentIncrease: string;
+    distanceReduction: string;
+    freshnessIncrease: string;
+  };
+  summary: string;
+}
+
+export interface Allocation {
+  requestId: string;
+  requestedItems: { [key: string]: number };
+  allocated: {
+    warehouseId: string;
+    warehouseName: string;
+    items: { foodType: string; allocated_kg: number; batchId: string }[];
+    distance_km: number;
+    avgFreshness_percent: number;
+  }[];
+  totalAllocated_kg: number;
+  totalRequired_kg: number;
+  fulfillmentRate_percent: number;
+}
+
+export interface AllocationMetrics {
+  totalRequests: number;
+  fulfilledRequests: number;
+  fulfillmentRate: number;
+  totalRequired: number;
+  totalAllocated: number;
+  avgDistance: number;
+  avgFreshness: number;
 }
 
 export const adminService = new AdminService();

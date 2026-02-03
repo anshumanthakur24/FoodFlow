@@ -59,9 +59,9 @@ export default function MapTimeline({
   // Filter shipments that are active (started but not arrived yet)
   const activeShipments = useMemo(() => {
     return shipments.filter((shipment) => {
+      const endTime = shipment.arrivedTime || shipment.etaTime;
       return (
-        currentTime >= shipment.startTime &&
-        (!shipment.arrivedTime || currentTime < shipment.arrivedTime)
+        currentTime >= shipment.startTime && (!endTime || currentTime < endTime)
       );
     });
   }, [shipments, currentTime]);
@@ -252,17 +252,23 @@ export default function MapTimeline({
             <Popup>
               <div className="p-3 min-w-[200px]">
                 <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
-                  <span className="text-xl">{getNodeStyle(node.type).emoji}</span>
+                  <span className="text-xl">
+                    {getNodeStyle(node.type).emoji}
+                  </span>
                   <span>{node.name}</span>
                 </h3>
                 <div className="space-y-1">
                   <p className="text-sm text-gray-700">
                     <span className="font-semibold">Type:</span>{" "}
-                    <span className="capitalize text-gray-800">{node.type}</span>
+                    <span className="capitalize text-gray-800">
+                      {node.type}
+                    </span>
                   </p>
                   <p className="text-sm text-gray-700">
                     <span className="font-semibold">Node ID:</span>{" "}
-                    <span className="font-mono text-gray-800">{node.nodeId}</span>
+                    <span className="font-mono text-gray-800">
+                      {node.nodeId}
+                    </span>
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
                     📍 {node.lat.toFixed(4)}, {node.lng.toFixed(4)}
@@ -292,21 +298,27 @@ export default function MapTimeline({
                   <div className="space-y-1">
                     <p className="text-sm text-gray-700">
                       <span className="font-semibold">Date:</span>{" "}
-                      <span className="text-gray-800">{event.time.toLocaleDateString('en-US', {
-                        year: 'numeric',
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}</span>
+                      <span className="text-gray-800">
+                        {event.time.toLocaleDateString("en-US", {
+                          year: "numeric",
+                          month: "short",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </span>
                     </p>
                     <p className="text-sm text-gray-700">
                       <span className="font-semibold">Event ID:</span>{" "}
-                      <span className="font-mono text-gray-800">{event.eventId}</span>
+                      <span className="font-mono text-gray-800">
+                        {event.eventId}
+                      </span>
                     </p>
                     {event.payload && (
                       <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
-                        <span className="font-semibold block mb-1">Details:</span>
+                        <span className="font-semibold block mb-1">
+                          Details:
+                        </span>
                         <pre className="whitespace-pre-wrap text-xs">
                           {JSON.stringify(event.payload, null, 2)}
                         </pre>
@@ -351,12 +363,16 @@ export default function MapTimeline({
           100% {
             transform: scale(1);
             opacity: 1;
-            box-shadow: 0 3px 10px rgba(0,0,0,0.4), 0 0 0 2px currentColor;
+            box-shadow:
+              0 3px 10px rgba(0, 0, 0, 0.4),
+              0 0 0 2px currentColor;
           }
           50% {
             transform: scale(1.15);
             opacity: 0.9;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5), 0 0 0 4px currentColor;
+            box-shadow:
+              0 4px 15px rgba(0, 0, 0, 0.5),
+              0 0 0 4px currentColor;
           }
         }
 

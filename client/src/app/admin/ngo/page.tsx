@@ -190,7 +190,7 @@ export default function NGODashboard() {
   const [ngoRequests, setNgoRequests] = useState<GoodsRequest[]>([]);
   const [incomingRequests, setIncomingRequests] = useState<GoodsRequest[]>([]);
   const [selectedRequest, setSelectedRequest] = useState<GoodsRequest | null>(
-    null
+    null,
   );
   const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -311,7 +311,7 @@ export default function NGODashboard() {
     setError(null);
     try {
       const requestToUpdate = incomingRequests.find(
-        (req) => (req._id || req.id) === requestId
+        (req) => (req._id || req.id) === requestId,
       );
       if (!requestToUpdate) {
         console.error("Request not found in local state:", requestId);
@@ -324,14 +324,14 @@ export default function NGODashboard() {
       // Call API to approve request
       const updatedRequest = await adminService.updateRequestStatus(
         requestId,
-        "approved"
+        "approved",
       );
 
       console.log("API response:", updatedRequest);
 
       // Remove the approved request from incoming requests list
       setIncomingRequests(
-        incomingRequests.filter((req) => (req._id || req.id) !== requestId)
+        incomingRequests.filter((req) => (req._id || req.id) !== requestId),
       );
 
       // Close modals
@@ -361,7 +361,7 @@ export default function NGODashboard() {
     setError(null);
     try {
       const requestToUpdate = incomingRequests.find(
-        (req) => (req._id || req.id) === requestId
+        (req) => (req._id || req.id) === requestId,
       );
       if (!requestToUpdate) {
         console.error("Request not found in local state:", requestId);
@@ -374,14 +374,14 @@ export default function NGODashboard() {
       // Call API to reject request - use 'cancelled' status instead of 'rejected'
       const updatedRequest = await adminService.updateRequestStatus(
         requestId,
-        "cancelled"
+        "cancelled",
       );
 
       console.log("API response:", updatedRequest);
 
       // Remove the cancelled request from incoming requests list
       setIncomingRequests(
-        incomingRequests.filter((req) => (req._id || req.id) !== requestId)
+        incomingRequests.filter((req) => (req._id || req.id) !== requestId),
       );
 
       // Close modals
@@ -815,7 +815,7 @@ export default function NGODashboard() {
                     Contact Person
                   </p>
                   <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    {ngo.contactInfo.contactPerson}
+                    {ngo.contactInfo?.contactPerson}
                   </p>
                 </div>
               </div>
@@ -865,10 +865,10 @@ export default function NGODashboard() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-sm text-zinc-900 dark:text-zinc-100">
-                        {ngo.contactInfo.contactPerson}
+                        {ngo.contactInfo?.contactPerson}
                       </div>
                       <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                        {ngo.contactInfo.phone || "N/A"}
+                        {ngo.contactInfo?.phone || "N/A"}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -1026,7 +1026,7 @@ export default function NGODashboard() {
                         Contact Person
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {selectedNGO.contactInfo.contactPerson}
+                        {selectedNGO.contactInfo?.contactPerson}
                       </p>
                     </div>
                   </div>
@@ -1049,7 +1049,7 @@ export default function NGODashboard() {
                         Email
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {selectedNGO.contactInfo.email}
+                        {selectedNGO.contactInfo?.email}
                       </p>
                     </div>
                   </div>
@@ -1072,7 +1072,7 @@ export default function NGODashboard() {
                         Phone
                       </p>
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                        {selectedNGO.contactInfo.phone}
+                        {selectedNGO.contactInfo?.phone}
                       </p>
                     </div>
                   </div>
@@ -1133,7 +1133,7 @@ export default function NGODashboard() {
                           <p className="text-xs text-zinc-500 dark:text-zinc-400">
                             Requested:{" "}
                             {new Date(
-                              request.createdOn || request.createdAt || ""
+                              request.createdOn || request.createdAt || "",
                             ).toLocaleDateString("en-US", {
                               month: "short",
                               day: "numeric",
@@ -1183,7 +1183,7 @@ export default function NGODashboard() {
                               year: "numeric",
                               month: "long",
                               day: "numeric",
-                            }
+                            },
                           )
                         : "N/A"}
                     </span>
@@ -1538,7 +1538,7 @@ export default function NGODashboard() {
                                   ? request.items
                                       .map(
                                         (item: any) =>
-                                          `${item.foodType} - ${item.required_kg} kg`
+                                          `${item.foodType} - ${item.required_kg} kg`,
                                       )
                                       .join(", ")
                                   : "No items specified"}
@@ -1592,7 +1592,7 @@ export default function NGODashboard() {
                                             ? ", "
                                             : ""}
                                         </span>
-                                      )
+                                      ),
                                     )
                                   : "N/A"}
                               </span>
@@ -1617,7 +1617,7 @@ export default function NGODashboard() {
                                 </span>{" "}
                                 {request.requiredBefore
                                   ? new Date(
-                                      request.requiredBefore
+                                      request.requiredBefore,
                                     ).toLocaleDateString()
                                   : "Not specified"}
                               </span>
@@ -1651,7 +1651,7 @@ export default function NGODashboard() {
                               Requested on{" "}
                               {request.createdOn
                                 ? new Date(
-                                    request.createdOn
+                                    request.createdOn,
                                   ).toLocaleDateString("en-US", {
                                     month: "short",
                                     day: "numeric",
@@ -1659,7 +1659,7 @@ export default function NGODashboard() {
                                   })
                                 : request.createdAt
                                   ? new Date(
-                                      request.createdAt
+                                      request.createdAt,
                                     ).toLocaleDateString("en-US", {
                                       month: "short",
                                       day: "numeric",
@@ -1685,7 +1685,7 @@ export default function NGODashboard() {
                           onClick={() => {
                             console.log(
                               "Accept button clicked for request:",
-                              request
+                              request,
                             );
                             console.log("Using ID:", request._id || request.id);
                             handleAcceptRequest(request._id || request.id);
@@ -1698,7 +1698,7 @@ export default function NGODashboard() {
                           onClick={() => {
                             console.log(
                               "Reject button clicked for request:",
-                              request
+                              request,
                             );
                             console.log("Using ID:", request._id || request.id);
                             handleRejectRequest(request._id || request.id);
@@ -1826,7 +1826,7 @@ export default function NGODashboard() {
                       ? new Date(
                           selectedRequest.requiredBefore ||
                             selectedRequest.requiredBy ||
-                            ""
+                            "",
                         ).toLocaleDateString("en-US", {
                           month: "short",
                           day: "numeric",
@@ -1875,7 +1875,7 @@ export default function NGODashboard() {
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                         {selectedRequest.createdOn
                           ? new Date(
-                              selectedRequest.createdOn
+                              selectedRequest.createdOn,
                             ).toLocaleDateString("en-US", {
                               year: "numeric",
                               month: "long",
@@ -1883,7 +1883,7 @@ export default function NGODashboard() {
                             })
                           : selectedRequest.createdAt
                             ? new Date(
-                                selectedRequest.createdAt
+                                selectedRequest.createdAt,
                               ).toLocaleDateString("en-US", {
                                 year: "numeric",
                                 month: "long",
@@ -1914,7 +1914,7 @@ export default function NGODashboard() {
                       <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
                         {selectedRequest.requiredBefore
                           ? new Date(
-                              selectedRequest.requiredBefore
+                              selectedRequest.requiredBefore,
                             ).toLocaleDateString("en-US", {
                               year: "numeric",
                               month: "long",
@@ -1933,14 +1933,14 @@ export default function NGODashboard() {
                   onClick={() => {
                     console.log(
                       "Modal Accept button clicked for:",
-                      selectedRequest
+                      selectedRequest,
                     );
                     console.log(
                       "Using ID:",
-                      selectedRequest._id || selectedRequest.id
+                      selectedRequest._id || selectedRequest.id,
                     );
                     handleAcceptRequest(
-                      selectedRequest._id || selectedRequest.id
+                      selectedRequest._id || selectedRequest.id,
                     );
                   }}
                   className="flex-1 rounded-lg bg-green-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-green-700"
@@ -1951,14 +1951,14 @@ export default function NGODashboard() {
                   onClick={() => {
                     console.log(
                       "Modal Reject button clicked for:",
-                      selectedRequest
+                      selectedRequest,
                     );
                     console.log(
                       "Using ID:",
-                      selectedRequest._id || selectedRequest.id
+                      selectedRequest._id || selectedRequest.id,
                     );
                     handleRejectRequest(
-                      selectedRequest._id || selectedRequest.id
+                      selectedRequest._id || selectedRequest.id,
                     );
                   }}
                   className="flex-1 rounded-lg bg-red-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-red-700"

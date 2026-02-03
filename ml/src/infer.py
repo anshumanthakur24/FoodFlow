@@ -10,6 +10,14 @@ import joblib
 import numpy as np
 import pandas as pd
 
+def _json_safe(obj):
+    if isinstance(obj, pd.Timestamp):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,6 +65,8 @@ def load_records(args: argparse.Namespace) -> List[Dict[str, Any]]:
 def maybe_build_records_from_server_payload(
     raw_payload: Dict[str, Any],
     default_freq: str,
+    festival_csv_path: Optional[str] = None,
+    income_csv_path: Optional[str] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """
     When the input is raw Server-model data (nodes/requests/shipments/batches),
@@ -95,8 +105,8 @@ def maybe_build_records_from_server_payload(
         shipments_df=shipments_df,
         batches_df=batches_df,
         freq=freq,
-        festival_csv_path=None,
-        income_csv_path=None,
+        festival_csv_path=festival_csv_path,
+        income_csv_path=income_csv_path,
     )
     if features.empty:
         return []
@@ -198,10 +208,32 @@ def main() -> None:
         raise KeyError("metadata.json does not contain 'feature_columns'.")
     default_freq = metadata.get("frequency", "M")
 
+    def resolve_data_path(value: Any) -> Optional[str]:
+        if not value or not isinstance(value, str):
+            return None
+        path = Path(value)
+        if path.is_absolute():
+            return str(path)
+        # Interpret relative paths as relative to the ML package root (ml/)
+        base_dir = Path(__file__).resolve().parent.parent
+        return str((base_dir / path).resolve())
+
+    meta_config = metadata.get("config") if isinstance(metadata, dict) else None
+    festival_csv_path = None
+    income_csv_path = None
+    if isinstance(meta_config, dict):
+        festival_csv_path = resolve_data_path(meta_config.get("festival_csv_path"))
+        income_csv_path = resolve_data_path(meta_config.get("income_csv_path"))
+
     # If raw server-model data was provided, build feature rows on the fly.
     server_records = None
     if isinstance(raw_payload, dict):
-        server_records = maybe_build_records_from_server_payload(raw_payload, default_freq)
+        server_records = maybe_build_records_from_server_payload(
+            raw_payload,
+            default_freq,
+            festival_csv_path=festival_csv_path,
+            income_csv_path=income_csv_path,
+        )
 
     if server_records is not None:
         if not server_records:
@@ -229,7 +261,8 @@ def main() -> None:
     if args.output_file:
         Path(args.output_file).write_text(json.dumps(response, indent=2), encoding="utf-8")
     else:
-        json.dump(response, sys.stdout)
+        json.dump(_json_safe(response), sys.stdout)
+
 
 
 if __name__ == "__main__":

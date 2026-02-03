@@ -181,7 +181,7 @@ export default function AdminDashboard() {
     async (
       district: string,
       page: number = 1,
-      newLimit: number = itemsPerPage
+      newLimit: number = itemsPerPage,
     ) => {
       setIsLoading(true);
       setError(null);
@@ -237,7 +237,7 @@ export default function AdminDashboard() {
         setIsLoading(false);
       }
     },
-    [itemsPerPage]
+    [itemsPerPage],
   );
 
   const handleDistrictChange = useCallback(
@@ -246,7 +246,7 @@ export default function AdminDashboard() {
       setActiveTab("all");
       await fetchNodes(district, page);
     },
-    [fetchNodes]
+    [fetchNodes],
   );
 
   // Handle page change
@@ -255,7 +255,7 @@ export default function AdminDashboard() {
       if (newPage < 1 || newPage > totalPages) return;
       handleDistrictChange(selectedDistrict, newPage);
     },
-    [selectedDistrict, totalPages, handleDistrictChange]
+    [selectedDistrict, totalPages, handleDistrictChange],
   );
 
   const farms = filteredNodes.filter((node) => node.type === "farm");
@@ -315,7 +315,7 @@ export default function AdminDashboard() {
         contact: newNode.contact || null,
       };
 
-      const response = await fetch(`${API_BASE_URL}/addNewNode`, {
+      const response = await fetch(`${API_BASE_URL}/node/addNewNode`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -326,7 +326,7 @@ export default function AdminDashboard() {
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(
-          errorData.message || `Failed to create node: ${response.statusText}`
+          errorData.message || `Failed to create node: ${response.statusText}`,
         );
       }
 
@@ -375,7 +375,7 @@ export default function AdminDashboard() {
       setIsAddModalOpen(false);
 
       alert(
-        `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} "${createdNode.name}" added successfully!`
+        `✅ ${newNode.type.charAt(0).toUpperCase() + newNode.type.slice(1)} "${createdNode.name}" added successfully!`,
       );
     } catch (err) {
       console.error("Error adding node:", err);
@@ -405,7 +405,7 @@ export default function AdminDashboard() {
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(
-          errorData.message || `Failed to delete node: ${response.statusText}`
+          errorData.message || `Failed to delete node: ${response.statusText}`,
         );
       }
 
@@ -413,7 +413,7 @@ export default function AdminDashboard() {
       const updatedNodes = { ...allNodes };
       Object.keys(updatedNodes).forEach((district) => {
         updatedNodes[district] = updatedNodes[district].filter(
-          (node) => node.id !== nodeId
+          (node) => node.id !== nodeId,
         );
       });
       setAllNodes(updatedNodes);
@@ -466,6 +466,63 @@ export default function AdminDashboard() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              <a
+                href="/admin/simulation"
+                className="rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 transition-colors flex items-center gap-2"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
+                  />
+                </svg>
+                Map Simulation
+              </a>
+              <a
+                href="/admin/comparison"
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors flex items-center gap-2"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                  />
+                </svg>
+                ML vs Regular
+              </a>
+              <a
+                href="/admin/timeline-comparison"
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 transition-colors flex items-center gap-2"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 10V3L4 14h7v7l9-11h-7z"
+                  />
+                </svg>
+                Timeline Compare
+              </a>
               <span className="rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300">
                 India Region
               </span>
@@ -562,7 +619,7 @@ export default function AdminDashboard() {
                       {DISTRICTS.filter((district) =>
                         district
                           .toLowerCase()
-                          .includes(districtSearchQuery.toLowerCase())
+                          .includes(districtSearchQuery.toLowerCase()),
                       ).map((district) => (
                         <button
                           key={district}
@@ -585,7 +642,7 @@ export default function AdminDashboard() {
                       {DISTRICTS.filter((district) =>
                         district
                           .toLowerCase()
-                          .includes(districtSearchQuery.toLowerCase())
+                          .includes(districtSearchQuery.toLowerCase()),
                       ).length === 0 &&
                         districtSearchQuery && (
                           <div className="px-3 py-2 text-center text-sm text-zinc-500 dark:text-zinc-400">
