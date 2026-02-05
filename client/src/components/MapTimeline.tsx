@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  Popup,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import AnimatedPolyline from "./AnimatedPolyline";
@@ -28,6 +35,10 @@ interface MapTimelineProps {
   currentTime: Date;
   startTime: Date;
   endTime: Date;
+  performanceMode?: boolean;
+  maxMarkers?: number;
+  maxAnimatedPolylines?: number;
+  maxEventMarkers?: number;
 }
 
 // Component to update map view when bounds change
@@ -43,13 +54,88 @@ function MapUpdater({ bounds }: { bounds: L.LatLngBounds | null }) {
   return null;
 }
 
+function ZoomTracker({ onZoom }: { onZoom: (z: number) => void }) {
+  useMapEvents({
+    zoomend: (ev) => {
+      onZoom(ev.target.getZoom());
+    },
+  });
+  return null;
+}
+
+type NodeCluster = {
+  key: string;
+  lat: number;
+  lng: number;
+  count: number;
+  byType: Record<string, number>;
+  bounds: L.LatLngBounds;
+};
+
+function gridClusterNodes(nodes: Node[], cellSizeDeg: number): NodeCluster[] {
+  const buckets = new Map<
+    string,
+    {
+      sumLat: number;
+      sumLng: number;
+      count: number;
+      byType: Record<string, number>;
+      points: [number, number][];
+    }
+  >();
+  for (const n of nodes) {
+    const latKey = Math.floor(n.lat / cellSizeDeg);
+    const lngKey = Math.floor(n.lng / cellSizeDeg);
+    const key = `${latKey}:${lngKey}`;
+    const bucket = buckets.get(key) || {
+      sumLat: 0,
+      sumLng: 0,
+      count: 0,
+      byType: {},
+      points: [],
+    };
+    bucket.sumLat += n.lat;
+    bucket.sumLng += n.lng;
+    bucket.count += 1;
+    bucket.byType[n.type] = (bucket.byType[n.type] || 0) + 1;
+    bucket.points.push([n.lat, n.lng]);
+    buckets.set(key, bucket);
+  }
+
+  const clusters: NodeCluster[] = [];
+  for (const [key, b] of buckets.entries()) {
+    const lat = b.sumLat / b.count;
+    const lng = b.sumLng / b.count;
+    clusters.push({
+      key,
+      lat,
+      lng,
+      count: b.count,
+      byType: b.byType,
+      bounds: L.latLngBounds(b.points),
+    });
+  }
+  clusters.sort((a, b) => b.count - a.count);
+  return clusters;
+}
+
 export default function MapTimeline({
   nodes,
   events,
   shipments,
   currentTime,
+  performanceMode,
+  maxMarkers = 500,
+  maxAnimatedPolylines = 50,
+  maxEventMarkers = 250,
 }: MapTimelineProps) {
   const [bounds, setBounds] = useState<L.LatLngBounds | null>(null);
+  const [zoom, setZoom] = useState<number>(5);
+
+  const perf =
+    (performanceMode ?? nodes.length > 250) ||
+    shipments.length > 200 ||
+    events.length > 400;
 
   // Filter events visible at current time
   const visibleEvents = useMemo(() => {
@@ -70,6 +156,21 @@ export default function MapTimeline({
   const visibleShipments = useMemo(() => {
     return shipments.filter((shipment) => shipment.startTime <= currentTime);
   }, [shipments, currentTime]);
+
+  const cellSizeDeg = useMemo(() => {
+    if (zoom <= 5) return 2.0;
+    if (zoom === 6) return 1.2;
+    if (zoom === 7) return 0.7;
+    if (zoom === 8) return 0.35;
+    return 0.2;
+  }, [zoom]);
+
+  const shouldClusterNodes = perf && nodes.length > 200 && zoom <= 7;
+
+  const clusteredNodes = useMemo(() => {
+    if (!shouldClusterNodes) return [] as NodeCluster[];
+    return gridClusterNodes(nodes, cellSizeDeg);
+  }, [cellSizeDeg, nodes, shouldClusterNodes]);
 
   // Calculate bounds using useMemo to avoid effect issues
   const calculatedBounds = useMemo(() => {
@@ -123,8 +224,35 @@ export default function MapTimeline({
   };
 
   // Create node icon with improved styling
-  const createNodeIcon = (type: string, node: Node) => {
+  const createNodeIcon = (type: string) => {
     const style = getNodeStyle(type);
+    const base = zoom <= 5 ? 22 : zoom === 6 ? 24 : zoom === 7 ? 26 : 28;
+    const size = perf ? Math.max(18, base - 4) : base + 6;
+
+    if (perf) {
+      return L.divIcon({
+        className: "node-marker",
+        html: `
+          <div style="
+            background: ${style.color};
+            width: ${size}px;
+            height: ${size}px;
+            border-radius: 9999px;
+            border: 2px solid white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: ${Math.max(12, Math.round(size * 0.55))}px;
+          ">
+            <span>${style.emoji}</span>
+          </div>
+        `,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+        popupAnchor: [0, -size / 2],
+      });
+    }
+
     return L.divIcon({
       className: "node-marker",
       html: `
@@ -160,6 +288,36 @@ export default function MapTimeline({
       iconSize: [40, 45],
       iconAnchor: [20, 45],
       popupAnchor: [0, -45],
+    });
+  };
+
+  const createClusterIcon = (cluster: NodeCluster) => {
+    const size = zoom <= 5 ? 34 : zoom === 6 ? 36 : 38;
+    const countText =
+      cluster.count >= 1000
+        ? `${Math.round(cluster.count / 100) / 10}k`
+        : String(cluster.count);
+    return L.divIcon({
+      className: "cluster-marker",
+      html: `
+        <div style="
+          width: ${size}px;
+          height: ${size}px;
+          border-radius: 9999px;
+          background: rgba(37, 99, 235, 0.95);
+          border: 2px solid white;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: white;
+          font-weight: 700;
+          font-size: 12px;
+        ">${countText}</div>
+      `,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+      popupAnchor: [0, -size / 2],
     });
   };
 
@@ -221,14 +379,22 @@ export default function MapTimeline({
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
         {bounds && <MapUpdater bounds={bounds} />}
+        <ZoomTracker onZoom={setZoom} />
 
-        {/* Render shipment paths */}
-        {visibleShipments.map((shipment) => {
+        {/* Render shipment paths (limit in perf mode) */}
+        {(perf
+          ? visibleShipments.filter((s) =>
+              activeShipments.some((a) => a.id === s.id),
+            )
+          : visibleShipments
+        ).map((shipment, idx) => {
           const path: [number, number][] = [
             [shipment.fromLat, shipment.fromLng],
             [shipment.toLat, shipment.toLng],
           ];
           const isActive = activeShipments.some((s) => s.id === shipment.id);
+          const shouldAnimate =
+            isActive && (!perf || idx < maxAnimatedPolylines);
 
           return (
             <AnimatedPolyline
@@ -237,113 +403,167 @@ export default function MapTimeline({
               color={isActive ? "#f59e0b" : "#94a3b8"}
               weight={isActive ? 4 : 2}
               opacity={isActive ? 0.8 : 0.4}
-              animated={isActive}
+              animated={shouldAnimate}
             />
           );
         })}
 
         {/* Render nodes */}
-        {nodes.map((node) => (
-          <Marker
-            key={node.id}
-            position={[node.lat, node.lng]}
-            icon={createNodeIcon(node.type, node)}
-          >
-            <Popup>
-              <div className="p-3 min-w-[200px]">
-                <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
-                  <span className="text-xl">
-                    {getNodeStyle(node.type).emoji}
-                  </span>
-                  <span>{node.name}</span>
-                </h3>
-                <div className="space-y-1">
-                  <p className="text-sm text-gray-700">
-                    <span className="font-semibold">Type:</span>{" "}
-                    <span className="capitalize text-gray-800">
-                      {node.type}
-                    </span>
-                  </p>
-                  <p className="text-sm text-gray-700">
-                    <span className="font-semibold">Node ID:</span>{" "}
-                    <span className="font-mono text-gray-800">
-                      {node.nodeId}
-                    </span>
-                  </p>
-                  <p className="text-xs text-gray-500 mt-2">
-                    📍 {node.lat.toFixed(4)}, {node.lng.toFixed(4)}
-                  </p>
-                </div>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-
-        {/* Render events */}
-        {visibleEvents.map((event) => {
-          // Skip location updates as they're shown by transit markers
-          if (event.type === "shipment_location_update") return null;
-
-          return (
-            <Marker
-              key={event.id}
-              position={[event.lat, event.lng]}
-              icon={createEventIcon(event.type)}
-            >
-              <Popup>
-                <div className="p-3 min-w-[200px]">
-                  <h3 className="font-bold text-base mb-2 capitalize">
-                    {event.type.replace(/_/g, " ")}
-                  </h3>
-                  <div className="space-y-1">
-                    <p className="text-sm text-gray-700">
-                      <span className="font-semibold">Date:</span>{" "}
-                      <span className="text-gray-800">
-                        {event.time.toLocaleDateString("en-US", {
-                          year: "numeric",
-                          month: "short",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    </p>
-                    <p className="text-sm text-gray-700">
-                      <span className="font-semibold">Event ID:</span>{" "}
-                      <span className="font-mono text-gray-800">
-                        {event.eventId}
-                      </span>
-                    </p>
-                    {event.payload && (
-                      <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
-                        <span className="font-semibold block mb-1">
-                          Details:
-                        </span>
-                        <pre className="whitespace-pre-wrap text-xs">
-                          {JSON.stringify(event.payload, null, 2)}
-                        </pre>
-                      </div>
-                    )}
+        {shouldClusterNodes
+          ? clusteredNodes.slice(0, maxMarkers).map((cluster) => (
+              <Marker
+                key={`cluster-${cluster.key}`}
+                position={[cluster.lat, cluster.lng]}
+                icon={createClusterIcon(cluster)}
+                eventHandlers={{
+                  click: (ev) => {
+                    const map = ev.target._map as L.Map | undefined;
+                    if (map)
+                      map.fitBounds(cluster.bounds, { padding: [80, 80] });
+                  },
+                }}
+              >
+                <Popup>
+                  <div className="p-3 min-w-[220px]">
+                    <h3 className="font-semibold text-sm text-gray-900">
+                      Cluster ({cluster.count} nodes)
+                    </h3>
+                    <div className="text-xs text-gray-600 mt-2 space-y-1">
+                      {Object.entries(cluster.byType)
+                        .sort((a, b) => b[1] - a[1])
+                        .map(([type, count]) => (
+                          <div
+                            key={type}
+                            className="flex items-center justify-between"
+                          >
+                            <span className="capitalize">{type}</span>
+                            <span className="font-medium">{count}</span>
+                          </div>
+                        ))}
+                    </div>
+                    <div className="text-[11px] text-gray-500 mt-2">
+                      Tip: click cluster to zoom.
+                    </div>
                   </div>
-                </div>
-              </Popup>
-            </Marker>
-          );
-        })}
+                </Popup>
+              </Marker>
+            ))
+          : nodes.slice(0, maxMarkers).map((node) => (
+              <Marker
+                key={node.id}
+                position={[node.lat, node.lng]}
+                icon={createNodeIcon(node.type)}
+              >
+                <Popup>
+                  <div className="p-3 min-w-[200px]">
+                    <h3 className="font-bold text-lg mb-2 flex items-center gap-2">
+                      <span className="text-xl">
+                        {getNodeStyle(node.type).emoji}
+                      </span>
+                      <span>{node.name}</span>
+                    </h3>
+                    <div className="space-y-1">
+                      <p className="text-sm text-gray-700">
+                        <span className="font-semibold">Type:</span>{" "}
+                        <span className="capitalize text-gray-800">
+                          {node.type}
+                        </span>
+                      </p>
+                      <p className="text-sm text-gray-700">
+                        <span className="font-semibold">Node ID:</span>{" "}
+                        <span className="font-mono text-gray-800">
+                          {node.nodeId}
+                        </span>
+                      </p>
+                      <p className="text-xs text-gray-500 mt-2">
+                        📍 {node.lat.toFixed(4)}, {node.lng.toFixed(4)}
+                      </p>
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
+
+        {/* Render events (hide/limit in perf mode) */}
+        {(perf ? visibleEvents.slice(-maxEventMarkers) : visibleEvents).map(
+          (event) => {
+            // Skip location updates as they're shown by transit markers
+            if (event.type === "shipment_location_update") return null;
+
+            if (perf && visibleEvents.length > maxEventMarkers * 2) {
+              // In perf mode with many events, only show key events.
+              if (
+                event.type !== "shipment_created" &&
+                event.type !== "shipment_arrived"
+              )
+                return null;
+            }
+
+            return (
+              <Marker
+                key={event.id}
+                position={[event.lat, event.lng]}
+                icon={createEventIcon(event.type)}
+              >
+                <Popup>
+                  <div className="p-3 min-w-[200px]">
+                    <h3 className="font-bold text-base mb-2 capitalize">
+                      {event.type.replace(/_/g, " ")}
+                    </h3>
+                    <div className="space-y-1">
+                      <p className="text-sm text-gray-700">
+                        <span className="font-semibold">Date:</span>{" "}
+                        <span className="text-gray-800">
+                          {event.time.toLocaleDateString("en-US", {
+                            year: "numeric",
+                            month: "short",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      </p>
+                      <p className="text-sm text-gray-700">
+                        <span className="font-semibold">Event ID:</span>{" "}
+                        <span className="font-mono text-gray-800">
+                          {event.eventId}
+                        </span>
+                      </p>
+                      {event.payload && (
+                        <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
+                          <span className="font-semibold block mb-1">
+                            Details:
+                          </span>
+                          <pre className="whitespace-pre-wrap text-xs">
+                            {JSON.stringify(event.payload, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          },
+        )}
 
         {/* Render animated transit markers */}
-        {activeShipments.map((shipment) => (
-          <AnimatedTransitMarker
-            key={shipment.id}
-            startPos={[shipment.fromLat, shipment.fromLng]}
-            endPos={[shipment.toLat, shipment.toLng]}
-            startTime={shipment.startTime}
-            endTime={shipment.etaTime || shipment.arrivedTime || new Date()}
-            currentTime={currentTime}
-            foodItem={shipment.foodItem}
-            shipmentId={shipment.shipmentId}
-          />
-        ))}
+        {activeShipments
+          .slice(0, perf ? maxAnimatedPolylines : activeShipments.length)
+          .map((shipment) => (
+            <AnimatedTransitMarker
+              key={shipment.id}
+              startPos={[shipment.fromLat, shipment.fromLng]}
+              endPos={[shipment.toLat, shipment.toLng]}
+              startTime={shipment.startTime}
+              endTime={shipment.etaTime || shipment.arrivedTime || new Date()}
+              currentTime={currentTime}
+              foodItem={shipment.foodItem}
+              shipmentId={shipment.shipmentId}
+              animate={!perf}
+              sizePx={perf ? 28 : 40}
+            />
+          ))}
       </MapContainer>
 
       <style jsx global>{`
@@ -376,8 +596,9 @@ export default function MapTimeline({
           }
         }
 
-        .node-marker:hover {
-          transform: rotate(-45deg) scale(1.1);
+        .cluster-marker {
+          background: transparent;
+          border: none;
         }
 
         .leaflet-marker-icon {

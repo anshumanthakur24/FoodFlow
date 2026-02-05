@@ -12,6 +12,8 @@ interface AnimatedTransitMarkerProps {
   currentTime: Date;
   foodItem: string;
   shipmentId: string;
+  animate?: boolean;
+  sizePx?: number;
 }
 
 export default function AnimatedTransitMarker({
@@ -22,6 +24,8 @@ export default function AnimatedTransitMarker({
   currentTime,
   foodItem,
   shipmentId,
+  animate = true,
+  sizePx = 40,
 }: AnimatedTransitMarkerProps) {
   const startMs = startTime.getTime();
   const endMs = endTime.getTime();
@@ -58,6 +62,21 @@ export default function AnimatedTransitMarker({
 
     const gradientId = `truckGradient-${shipmentId.replace(/[^a-zA-Z0-9]/g, "")}`;
 
+    const svgSize = Math.max(24, Math.min(48, sizePx));
+    const bounceStyle = animate
+      ? "animation: bounce 2s ease-in-out infinite;"
+      : "";
+    const bounceCss = animate
+      ? `
+        <style>
+          @keyframes bounce {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-3px); }
+          }
+        </style>
+      `
+      : "";
+
     return L.divIcon({
       className: "animated-truck-marker",
       html: `
@@ -66,8 +85,8 @@ export default function AnimatedTransitMarker({
           transform: rotate(${rotation}deg);
           filter: drop-shadow(0 4px 8px rgba(0,0,0,0.4));
         ">
-          <svg width="40" height="40" viewBox="0 0 40 40" style="
-            animation: bounce 2s ease-in-out infinite;
+          <svg width="${svgSize}" height="${svgSize}" viewBox="0 0 40 40" style="
+            ${bounceStyle}
           ">
             <defs>
               <linearGradient id="${gradientId}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -94,18 +113,13 @@ export default function AnimatedTransitMarker({
             <line x1="4" y1="24" x2="8" y2="24" stroke="#f59e0b" stroke-width="2" opacity="0.6" stroke-dasharray="2,2"/>
           </svg>
         </div>
-        <style>
-          @keyframes bounce {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-3px); }
-          }
-        </style>
+        ${bounceCss}
       `,
-      iconSize: [40, 40],
-      iconAnchor: [20, 20],
-      popupAnchor: [0, -20],
+      iconSize: [svgSize, svgSize],
+      iconAnchor: [svgSize / 2, svgSize / 2],
+      popupAnchor: [0, -svgSize / 2],
     });
-  }, [endPos, startPos, shipmentId]);
+  }, [animate, endPos, sizePx, startPos, shipmentId]);
 
   if (!isInTransit) return null;
 

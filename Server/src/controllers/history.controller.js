@@ -86,13 +86,12 @@ const calcMetrics = (allocations, requests, context = {}) => {
   let deliveredAtRiskKg = 0;
 
   for (const alloc of allocations) {
+    // For snapshot simulations, treat dispatch as-of the snapshot date.
+    // Using historical request.createdOn can make items appear deliverable
+    // even when they are expired at the snapshot time, which confuses the UI.
     const dispatchTime = alloc?.dispatchTime
       ? new Date(alloc.dispatchTime)
-      : (() => {
-          const req = requests.find((r) => r.requestID === alloc.requestId);
-          if (req?.createdOn) return new Date(req.createdOn);
-          return referenceDate;
-        })();
+      : referenceDate;
 
     const travelHours = estimateTravelHours(alloc.distance_km || 0);
     const deliveryTime = new Date(
@@ -138,6 +137,44 @@ const calcMetrics = (allocations, requests, context = {}) => {
     deliveredSpoiledKg: Math.round(deliveredSpoiledKg * 100) / 100,
     deliveredAtRiskKg: Math.round(deliveredAtRiskKg * 100) / 100,
   };
+};
+
+const annotateAllocationsWithFreshnessAtDelivery = (
+  allocations,
+  { batchesById = new Map(), referenceDate = new Date(), avgTempC = 25 } = {}
+) => {
+  const estimateTravelHours = (distanceKm) => {
+    const avgSpeedKmh = 40;
+    const baseHours = (Number(distanceKm) || 0) / avgSpeedKmh;
+    const breaks = Math.floor(baseHours / 4) * 0.5;
+    return baseHours + breaks;
+  };
+
+  return (allocations || []).map((alloc) => {
+    const dispatchTime = alloc?.dispatchTime
+      ? new Date(alloc.dispatchTime)
+      : referenceDate;
+    const travelHours = estimateTravelHours(alloc?.distance_km || 0);
+    const deliveryTime = new Date(
+      dispatchTime.getTime() + travelHours * 3600 * 1000
+    );
+
+    const batches = (alloc?.batches || []).map((used) => {
+      const batchIdStr = used?.batchId?.toString?.() ?? String(used.batchId);
+      const batch = batchesById.get(batchIdStr);
+
+      const freshnessAtDelivery = batch
+        ? calculateFreshnessPct(batch, deliveryTime, avgTempC)
+        : Number(used.freshness) || 100;
+
+      return {
+        ...used,
+        freshness_at_delivery: Math.round(freshnessAtDelivery * 100) / 100,
+      };
+    });
+
+    return { ...alloc, batches };
+  });
 };
 
 /**
@@ -492,7 +529,9 @@ const compareSimulations = asyncHandler(async (req, res) => {
   // Run both strategies in parallel
   const [regularAllocations, mlAllocations] = await Promise.all([
     allocateRegular(requests, batches, warehouses, ngos),
-    allocateML(requests, batches, warehouses, ngos),
+    allocateML(requests, batches, warehouses, ngos, {
+      referenceDate: targetDate,
+    }),
   ]);
 
   // Calculate metrics using shared helper function
@@ -563,47 +602,437 @@ const compareSimulations = asyncHandler(async (req, res) => {
  * Returns detailed simulation data with node coordinates for map visualization
  */
 const simulateAllocations = asyncHandler(async (req, res) => {
-  // Fetch current data from database - get any recent requests and batches
-  const [requests, batches, warehouses, ngoNodes, ngoOrgs] = await Promise.all([
-    Request.find().sort({ createdOn: -1 }).limit(100).lean(),
-    Batch.find().limit(200).lean(),
-    Node.find({ type: "warehouse" }).lean(),
-    Node.find({ type: "ngo" }).lean(),
-    NGO.find().lean(),
-  ]);
+  const { date, days, backlog } = req.query;
+
+  // When a date is provided, simulate the world "as-of" end-of-day.
+  // Otherwise, use the current timestamp.
+  const targetDate = date ? new Date(String(date)) : new Date();
+  if (date && isNaN(targetDate.getTime())) {
+    throw new ApiError(400, "Invalid date format. Use YYYY-MM-DD");
+  }
+  if (date) targetDate.setHours(23, 59, 59, 999);
+
+  const windowDaysRaw = Number(days ?? process.env.SIM_WINDOW_DAYS ?? 7);
+  const windowDays =
+    Number.isFinite(windowDaysRaw) && windowDaysRaw > 0
+      ? Math.min(Math.max(Math.floor(windowDaysRaw), 7), 31)
+      : 7;
+
+  const backlogLimitRaw = Number(
+    backlog ?? process.env.SIM_BACKLOG_REQUEST_LIMIT ?? 10
+  );
+  const backlogLimit =
+    Number.isFinite(backlogLimitRaw) && backlogLimitRaw >= 0
+      ? Math.min(Math.max(Math.floor(backlogLimitRaw), 0), 200)
+      : 10;
+
+  const windowEnd = new Date(targetDate);
+  const windowStart = new Date(targetDate);
+  windowStart.setHours(0, 0, 0, 0);
+  windowStart.setDate(windowStart.getDate() - (windowDays - 1));
+
+  // Fetch snapshot data from database.
+  // IMPORTANT: Snapshot size materially affects ML feature variance.
+  // Use env overrides to widen/narrow the slice without code changes.
+  // Defaults are sized for interactive UI use.
+  // Override via env when you want full-fidelity snapshots.
+  const requestLimit = Number(process.env.SIM_SNAPSHOT_REQUEST_LIMIT ?? 400);
+  const batchLimit = Number(process.env.SIM_SNAPSHOT_BATCH_LIMIT ?? 1500);
+
+  const inWindowQuery = Request.find({
+    createdOn: { $gte: windowStart, $lte: windowEnd },
+    status: "pending",
+  })
+    .sort({ createdOn: 1 })
+    .lean();
+
+  const backlogQuery = backlogLimit
+    ? Request.find({
+        createdOn: { $lt: windowStart },
+        status: "pending",
+      })
+        .sort({ createdOn: -1 })
+        .limit(backlogLimit)
+        .lean()
+    : null;
+
+  // Fetch requests for the simulation window, plus a small backlog from before it.
+  const inWindowRequests =
+    requestLimit > 0
+      ? await inWindowQuery.limit(requestLimit)
+      : await inWindowQuery;
+
+  const backlogRequests = backlogQuery ? await backlogQuery : [];
+
+  // Order: backlog first (oldest unmet), then current window.
+  const requests = [...backlogRequests.reverse(), ...inWindowRequests];
 
   if (requests.length === 0) {
     throw new ApiError(404, "No requests found in database");
   }
 
+  // Simulation window is the requested date window.
+  const simulationStartTime = new Date(windowStart);
+  const simulationEndTime = new Date(windowEnd);
+
+  // Query batches that exist by the end of the simulation window.
+  // IMPORTANT: Use manufacture_date as the "availability" timestamp; createdAt is DB insertion time
+  // and can make Day 1 inventory appear as 0 if the dataset was imported later.
+  const batchQuery = Batch.find({
+    manufacture_date: { $lte: simulationEndTime },
+    status: "stored",
+    // Exclude batches that were already expired by the start of the window.
+    $or: [
+      { expiry_iso: { $gt: simulationStartTime } },
+      { expiry_iso: { $exists: false } },
+      { expiry_iso: null },
+    ],
+  })
+    .sort({ manufacture_date: -1 })
+    .lean();
+
+  const [batches, warehouses, ngoNodes, ngoOrgs, allNodes] = await Promise.all([
+    batchLimit > 0 ? batchQuery.limit(batchLimit) : batchQuery,
+    Node.find({ type: "warehouse" }).lean(),
+    Node.find({ type: "ngo" }).lean(),
+    NGO.find().lean(),
+    Node.find().lean(),
+  ]);
+
+  const batchIds = batches.map((b) => b._id);
+  const shipments = batchIds.length
+    ? await Shipment.find({
+        start_iso: { $lte: simulationStartTime },
+        batchIds: { $in: batchIds },
+      }).lean()
+    : [];
+
   if (batches.length === 0) {
     throw new ApiError(404, "No batches found in database");
   }
 
-  // Run both allocations - pass ngoNodes as 4th parameter
+  // Run both allocations against independent copies of the same batch snapshot.
+  // This prevents one strategy from mutating batch quantities and affecting the other.
+  const cloneBatches = (arr) =>
+    Array.isArray(arr) ? arr.map((b) => ({ ...b })) : [];
+  const regularBatches = cloneBatches(batches);
+  const mlBatches = cloneBatches(batches);
+
+  // Dispatch scheduling
+  // Default: spread dispatch across the simulation window so playback evolves day-by-day.
+  // Use `dispatchMode=createdOn` (or env `SIM_DISPATCH_MODE=createdOn`) to anchor dispatch to request.createdOn.
+  const dispatchMode = String(
+    req.query.dispatchMode ?? process.env.SIM_DISPATCH_MODE ?? "spread"
+  ).toLowerCase();
+
+  const clampMs = (ms) => {
+    const lo = simulationStartTime.getTime();
+    const hi = simulationEndTime.getTime();
+    if (!Number.isFinite(ms)) return lo;
+    return Math.min(Math.max(ms, lo), hi);
+  };
+
+  // Optional: leave headroom so late-window dispatches arrive within the window.
+  // Default is 0h because some datasets only have inventory available late in the day.
+  const latestDispatchCeilMs = (() => {
+    const hi = simulationEndTime.getTime();
+    const lo = simulationStartTime.getTime();
+    const headroomHoursRaw = Number(
+      process.env.SIM_DISPATCH_HEADROOM_HOURS ?? 0
+    );
+    const headroomHours =
+      Number.isFinite(headroomHoursRaw) && headroomHoursRaw > 0
+        ? Math.min(headroomHoursRaw, 48)
+        : 0;
+    const headroomMs = headroomHours * 3600 * 1000;
+    return Math.max(lo, hi - headroomMs);
+  })();
+
+  const requestsForAllocation = (requests || []).map((r) => ({ ...r }));
+  if (dispatchMode === "createdon") {
+    for (const r of requestsForAllocation) {
+      const rawMs = r?.createdOn ? new Date(r.createdOn).getTime() : NaN;
+      const ms = clampMs(rawMs);
+      r.dispatchTime = new Date(
+        Math.min(ms, latestDispatchCeilMs)
+      ).toISOString();
+    }
+  } else {
+    // Plan allocations at the latest dispatch time (end-of-window) so batch selection
+    // is done under worst-case freshness/expiry constraints.
+    // Then we spread *allocations* across the window for playback.
+    const planIso = new Date(latestDispatchCeilMs).toISOString();
+    for (const r of requestsForAllocation) {
+      r.dispatchTime = planIso;
+    }
+  }
+
   const regularAllocations = await allocateRegular(
-    requests,
-    batches,
+    requestsForAllocation,
+    regularBatches,
     warehouses,
-    ngoNodes
+    ngoNodes,
+    {
+      dispatchTimeFloor: simulationStartTime,
+      dispatchTimeCeil: simulationEndTime,
+    }
   );
   const mlAllocations = await allocateML(
-    requests,
-    batches,
+    requestsForAllocation,
+    mlBatches,
     warehouses,
-    ngoNodes
+    ngoNodes,
+    {
+      dispatchTimeFloor: simulationStartTime,
+      dispatchTimeCeil: simulationEndTime,
+    }
   );
 
-  // Calculate metrics
   const batchesById = new Map(batches.map((b) => [b._id.toString(), b]));
-  const regularMetrics = calcMetrics(regularAllocations, requests, {
+
+  // For playback: spread dispatch times across the selected window.
+  // This makes shipments appear from day 1 through day N even if requests were created late.
+  if (dispatchMode !== "createdon") {
+    const spreadAllocationsAcrossWindow = (allocations) => {
+      const lo = simulationStartTime.getTime();
+      const hi = simulationEndTime.getTime();
+      const span = Math.max(0, hi - lo);
+      const nonZero = (allocations || []).filter(
+        (a) => (Number(a?.allocated_kg) || 0) > 0
+      );
+      const denom = Math.max(1, nonZero.length - 1);
+      nonZero.forEach((alloc, idx) => {
+        const scheduledMs0 = lo + Math.round((span * idx) / denom);
+
+        // Ensure we never "dispatch" before the allocated batches exist.
+        // (We plan allocations at end-of-window for feasibility, then spread for playback;
+        // this clamp prevents impossible early dispatch that would artificially boost freshness.)
+        let minDispatchMs = scheduledMs0;
+        for (const used of alloc?.batches || []) {
+          const id = used?.batchId?.toString?.() ?? String(used.batchId);
+          const b = batchesById.get(id);
+          if (!b) continue;
+
+          const availRaw = b.manufacture_date || b.createdAt || null;
+          const availMs = availRaw ? new Date(availRaw).getTime() : NaN;
+          if (Number.isFinite(availMs)) {
+            minDispatchMs = Math.max(minDispatchMs, availMs);
+          }
+        }
+
+        alloc.dispatchTime = new Date(clampMs(minDispatchMs)).toISOString();
+      });
+    };
+
+    spreadAllocationsAcrossWindow(regularAllocations);
+    spreadAllocationsAcrossWindow(mlAllocations);
+  }
+
+  // Regular baseline should never ship batches that are already expired at dispatch
+  // or that would arrive expired.
+  const estimateTravelHours = (distanceKm) => {
+    const avgSpeedKmh = 40;
+    const baseHours = (Number(distanceKm) || 0) / avgSpeedKmh;
+    const breaks = Math.floor(baseHours / 4) * 0.5;
+    return baseHours + breaks;
+  };
+
+  const filterExpiredForRegular = (allocations) =>
+    (allocations || []).map((alloc) => {
+      const dispatchTime = alloc?.dispatchTime
+        ? new Date(alloc.dispatchTime)
+        : simulationStartTime;
+
+      let keptKg = 0;
+      const keptBatches = [];
+      for (const used of alloc?.batches || []) {
+        const qty = Number(used?.quantity) || 0;
+        if (qty <= 0) continue;
+
+        const batchIdStr = used?.batchId?.toString?.() ?? String(used.batchId);
+        const batch = batchesById.get(batchIdStr);
+        if (!batch) continue;
+
+        const freshnessAtDispatch = calculateFreshnessPct(batch, dispatchTime);
+        if (!Number.isFinite(freshnessAtDispatch) || freshnessAtDispatch <= 0) {
+          continue;
+        }
+
+        keptKg += qty;
+        keptBatches.push(used);
+      }
+
+      return {
+        ...alloc,
+        allocated_kg: Math.round(keptKg * 100) / 100,
+        batches: keptBatches,
+      };
+    });
+
+  const allowSpoiledRegular = process.env.REGULAR_ALLOW_SPOILED === "1";
+
+  const simAvgTempC = (() => {
+    const raw = Number(process.env.SIM_AVG_TEMP_C);
+    return Number.isFinite(raw) ? raw : 25;
+  })();
+
+  // Regular supply chain is less optimized / weaker cold-chain.
+  // Model that as a higher effective ambient temperature during handling + transport.
+  const regularTempPenaltyC = (() => {
+    const raw = Number(process.env.REGULAR_TEMP_PENALTY_C);
+    return Number.isFinite(raw) ? raw : 5;
+  })();
+  const regularAvgTempC = simAvgTempC + regularTempPenaltyC;
+
+  const regularAllocationsFiltered = allowSpoiledRegular
+    ? regularAllocations
+    : filterExpiredForRegular(regularAllocations);
+
+  // Calculate metrics
+  const regularMetrics = calcMetrics(regularAllocationsFiltered, requests, {
     batchesById,
-    referenceDate: new Date(),
+    referenceDate: simulationStartTime,
+    avgTempC: regularAvgTempC,
   });
   const mlMetrics = calcMetrics(mlAllocations, requests, {
     batchesById,
-    referenceDate: new Date(),
+    referenceDate: simulationStartTime,
+    avgTempC: simAvgTempC,
   });
+
+  const regularAllocationsAnnotated =
+    annotateAllocationsWithFreshnessAtDelivery(regularAllocationsFiltered, {
+      batchesById,
+      referenceDate: simulationStartTime,
+      avgTempC: regularAvgTempC,
+    });
+  const mlAllocationsAnnotated = annotateAllocationsWithFreshnessAtDelivery(
+    mlAllocations,
+    { batchesById, referenceDate: simulationStartTime, avgTempC: simAvgTempC }
+  );
+
+  // Build an ML snapshot payload from the exact same DB slice used for simulation.
+  // The ML gateway supports raw server snapshots (nodes/requests/shipments/batches).
+  const ngoNodeIdByOrgId = new Map(
+    (ngoOrgs || [])
+      .map((org) => {
+        const orgId = org?._id?.toString?.() ?? String(org._id);
+        const node = (ngoNodes || []).find((n) => n?.name === org?.name);
+        const nodeId = node?._id?.toString?.() ?? null;
+        return [orgId, nodeId];
+      })
+      .filter((pair) => pair[0])
+  );
+
+  const mlSnapshotPayload = {
+    freq: "M",
+    nodes: (allNodes || []).map((node) => ({
+      _id: node._id?.toString?.() ?? String(node._id),
+      nodeId: node._id?.toString?.() ?? String(node._id),
+      type: node.type,
+      name: node.name || null,
+      district: node.district || null,
+      state: node.state || node.regionId || "Unknown",
+      regionId: node.regionId || null,
+      location: node.location || null,
+      capacity_kg: Number(node.capacity_kg) || 0,
+    })),
+    requests: (requests || []).map((r) => ({
+      _id: r._id?.toString?.() ?? String(r._id),
+      requestId:
+        r.requestID || r.requestId || (r._id?.toString?.() ?? String(r._id)),
+      createdOn_iso: (() => {
+        const raw =
+          r.createdOn ?? r.createdAt ?? r.created_at ?? r.created_on ?? null;
+        if (raw instanceof Date) return raw.toISOString();
+        if (typeof raw === "string" && raw) return raw;
+        return null;
+      })(),
+      requesterNode: (() => {
+        const orgId = r.requesterNode?.toString?.() ?? String(r.requesterNode);
+        const nodeId = orgId ? ngoNodeIdByOrgId.get(orgId) : null;
+        return nodeId || orgId || null;
+      })(),
+      items: Array.isArray(r.items) ? r.items : [],
+      requiredBy_iso:
+        r.requiredBefore instanceof Date
+          ? r.requiredBefore.toISOString()
+          : r.requiredBefore || null,
+      status: r.status || "pending",
+    })),
+    shipments: (shipments || []).map((s) => ({
+      _id: s._id?.toString?.() ?? String(s._id),
+      shipmentId:
+        s.shipmentID?.toString?.() ||
+        s.shipmentId?.toString?.() ||
+        (s._id?.toString?.() ?? String(s._id)),
+      batchIds: Array.isArray(s.batchIds)
+        ? s.batchIds.map((id) => id?.toString?.() ?? String(id))
+        : [],
+      fromNode: s.fromNode?.toString?.() ?? (s.fromNode || null),
+      toNode: s.toNode?.toString?.() ?? (s.toNode || null),
+      start_iso:
+        s.start_iso instanceof Date
+          ? s.start_iso.toISOString()
+          : s.start_iso || null,
+      eta_iso:
+        s.eta_iso instanceof Date ? s.eta_iso.toISOString() : s.eta_iso || null,
+      arrived_iso:
+        s.arrived_iso instanceof Date
+          ? s.arrived_iso.toISOString()
+          : s.arrived_iso || null,
+      travel_time_minutes: Number(s.travel_time_minutes) || null,
+      distance_km:
+        typeof s.distance_km === "number"
+          ? s.distance_km
+          : Number(s.distance_km) || null,
+      status: s.status || null,
+    })),
+    batches: (batches || []).map((b) => ({
+      _id: b._id?.toString?.() ?? String(b._id),
+      batchId: b._id?.toString?.() ?? String(b._id),
+      originNode: b.originNode?.toString?.() ?? (b.originNode || null),
+      currentNode:
+        b.currentNode?.toString?.() ?? (b.currentNode || b.originNode || null),
+      quantity_kg:
+        typeof b.quantity_kg === "number"
+          ? b.quantity_kg
+          : Number(b.quantity_kg) || 0,
+      original_quantity_kg:
+        typeof b.original_quantity_kg === "number"
+          ? b.original_quantity_kg
+          : Number(b.original_quantity_kg) || null,
+      foodType: b.foodType || null,
+      shelf_life_hours:
+        typeof b.shelf_life_hours === "number"
+          ? b.shelf_life_hours
+          : Number(b.shelf_life_hours) || null,
+      freshnessPct:
+        typeof b.freshnessPct === "number"
+          ? b.freshnessPct
+          : Number(b.freshnessPct) || null,
+      manufacture_date:
+        b.manufacture_date instanceof Date
+          ? b.manufacture_date.toISOString()
+          : b.manufacture_date || null,
+      createdAt:
+        b.createdAt instanceof Date
+          ? b.createdAt.toISOString()
+          : b.createdAt || null,
+      expiry_iso:
+        b.expiry_iso instanceof Date
+          ? b.expiry_iso.toISOString()
+          : b.expiry_iso || null,
+      status: b.status || "stored",
+    })),
+    meta: {
+      targetDate_iso: targetDate.toISOString(),
+      simulationStartTime_iso: simulationStartTime.toISOString(),
+      requestCount: requests.length,
+      batchCount: batches.length,
+      shipmentCount: shipments.length,
+    },
+  };
 
   // Convert to visualization format with coordinates
   const convertToVisualization = (allocations, strategyName, metrics) => {
@@ -638,35 +1067,22 @@ const simulateAllocations = asyncHandler(async (req, res) => {
     };
   };
 
-  // Use earliest request time as start time
-  const startTime =
-    requests.length > 0
-      ? new Date(
-          Math.min(...requests.map((r) => new Date(r.createdOn).getTime()))
-        )
-      : new Date();
-
-  const endTime =
-    requests.length > 0
-      ? new Date(
-          Math.max(...requests.map((r) => new Date(r.createdOn).getTime()))
-        )
-      : new Date();
-
   return res.status(200).json(
     new ApiResponse(
       200,
       {
-        startTime,
-        endTime,
+        startTime: simulationStartTime,
+        endTime: simulationEndTime,
         totalRequests: requests.length,
         totalBatches: batches.length,
+        snapshotDate: targetDate.toISOString(),
+        mlSnapshotPayload,
         regular: convertToVisualization(
-          regularAllocations,
+          regularAllocationsAnnotated,
           "Regular",
           regularMetrics
         ),
-        ml: convertToVisualization(mlAllocations, "ML", mlMetrics),
+        ml: convertToVisualization(mlAllocationsAnnotated, "ML", mlMetrics),
       },
       "Simulation data generated successfully"
     )

@@ -19,15 +19,27 @@ def prepare_feature_frame(
     shipments_df: pd.DataFrame,
     batches_df: pd.DataFrame,
     freq: str,
+    ngos_df: Optional[pd.DataFrame] = None,
     festival_csv_path: Optional[str] = None,
     income_csv_path: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, object]]:
     nodes = _prepare_nodes(nodes_df)
     batches = _normalize_batches(batches_df)
 
-    request_block = _prepare_request_features(requests_df, nodes, freq)
+    request_block = _prepare_request_features(requests_df, nodes, freq, ngos_df=ngos_df)
     shipment_block = _prepare_shipment_features(shipments_df, nodes, batches, freq)
     batch_block = _prepare_batch_features(batches, nodes, freq)
+
+    # If we have any snapshot-derived activity rows, we should avoid returning
+    # "historical" rows that come only from external feature blocks (festival/income).
+    # This keeps inference aligned to the live snapshot being scored.
+    activity_blocks = [b for b in (request_block, shipment_block, batch_block) if not b.empty]
+    activity_keys = (
+        pd.concat([b[KEY_COLUMNS] for b in activity_blocks], ignore_index=True)
+        .drop_duplicates()
+        if activity_blocks
+        else pd.DataFrame()
+    )
     festival_block, festival_meta = _load_festival_features(festival_csv_path, freq)
     income_dynamic, income_static, income_meta = _load_income_features(income_csv_path, freq)
 
@@ -35,7 +47,6 @@ def prepare_feature_frame(
         request_block,
         shipment_block,
         batch_block,
-        festival_block,
         income_dynamic,
     ]
     blocks = [block for block in blocks if not block.empty]
@@ -44,6 +55,27 @@ def prepare_feature_frame(
         features = _merge_blocks(blocks)
     else:
         features = pd.DataFrame(columns=KEY_COLUMNS)
+
+    if not activity_keys.empty and not features.empty:
+        features = features.merge(activity_keys, on=KEY_COLUMNS, how="inner")
+
+    # Festival CSV may only contain a single year's calendar (e.g., 2022). To let
+    # festival seasonality inform 2026+ snapshots, we merge festivals by
+    # (state, district, month-of-year) instead of exact year.
+    if not festival_block.empty and not features.empty:
+        # Use a temporary column name to avoid becoming a trained feature.
+        features["__month_of_year"] = pd.to_datetime(features["period_start"], errors="coerce").dt.month
+        features = features.merge(
+            festival_block,
+            left_on=["state", "district", "__month_of_year"],
+            right_on=["state", "district", "month_of_year"],
+            how="left",
+        )
+
+        festival_cols = [col for col in features.columns if isinstance(col, str) and col.startswith("festival_")]
+        if festival_cols:
+            features[festival_cols] = features[festival_cols].fillna(0.0)
+        features.drop(columns=["__month_of_year", "month_of_year"], inplace=True, errors="ignore")
 
     if not income_static.empty:
         features = features.merge(income_static, on=["state", "district"], how="left")
@@ -73,8 +105,23 @@ def _prepare_nodes(nodes_df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("Nodes dataframe missing Mongo _id field.")
 
     nodes["node_mongo_id"] = nodes["_id"].astype(str)
-    nodes["state"] = nodes.get("state", "Unknown").fillna("Unknown")
-    nodes["district"] = nodes.get("district", "Unknown").fillna("Unknown")
+
+    # Preserve name when available (useful for NGO org -> node mapping).
+    if "name" not in nodes.columns:
+        nodes["name"] = pd.NA
+
+    # Backend A stores state-like info in regionId; some snapshots may already provide state.
+    if "state" in nodes.columns:
+        nodes["state"] = nodes["state"].astype("string").fillna("Unknown")
+    elif "regionId" in nodes.columns:
+        nodes["state"] = nodes["regionId"].astype("string").fillna("Unknown")
+    else:
+        nodes["state"] = "Unknown"
+
+    if "district" in nodes.columns:
+        nodes["district"] = nodes["district"].astype("string").fillna("Unknown")
+    else:
+        nodes["district"] = "Unknown"
 
     if "capacity_kg" in nodes.columns:
         nodes["capacity_kg"] = pd.to_numeric(nodes["capacity_kg"], errors="coerce")
@@ -140,14 +187,63 @@ def _normalize_batches(batches_df: pd.DataFrame) -> pd.DataFrame:
 
 
 
-def _prepare_request_features(requests_df: pd.DataFrame, nodes: pd.DataFrame, freq: str) -> pd.DataFrame:
+def _prepare_request_features(
+    requests_df: pd.DataFrame,
+    nodes: pd.DataFrame,
+    freq: str,
+    ngos_df: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
     if requests_df is None or requests_df.empty:
         LOGGER.info("No request documents found for the selected period.")
         return pd.DataFrame(columns=KEY_COLUMNS + ["requested_kg", "unique_food_types", "request_count"])
 
     requests = requests_df.copy()
-    requests["requesterNode"] = requests["requesterNode"].astype(str)
-    requests["requiredBy_iso"] = pd.to_datetime(requests.get("requiredBy_iso"), errors="coerce")
+
+    # Normalize schema differences across services:
+    # - request id can be requestID, requestId, requestID/requestId, or _id
+    if "requestId" not in requests.columns:
+        if "requestID" in requests.columns:
+            requests["requestId"] = requests["requestID"]
+        else:
+            requests["requestId"] = requests.get("_id")
+
+    if "requesterNode" in requests.columns:
+        requests["requesterNode"] = requests["requesterNode"].astype(str)
+    else:
+        requests["requesterNode"] = ""
+
+    # Backend A uses requiredBefore; some snapshots use requiredBy_iso.
+    if "requiredBy_iso" in requests.columns:
+        required_col = "requiredBy_iso"
+    elif "requiredBefore" in requests.columns:
+        required_col = "requiredBefore"
+    else:
+        required_col = "requiredBy_iso"
+    requests["requiredBy_iso"] = pd.to_datetime(requests.get(required_col), errors="coerce")
+
+    # Optional: Map NGO org _id -> NGO Node _id by name so request joins work in training.
+    # In live inference snapshots, requesterNode is already normalized to match nodes._id.
+    if ngos_df is not None and not ngos_df.empty and not nodes.empty:
+        try:
+            ngo_org = ngos_df.copy()
+            if "_id" in ngo_org.columns and "name" in ngo_org.columns and "name" in nodes.columns and "type" in nodes.columns:
+                ngo_org["org_id"] = ngo_org["_id"].astype(str)
+                ngo_org["name"] = ngo_org["name"].astype("string")
+
+                ngo_nodes = nodes[nodes["type"].astype("string") == "ngo"].copy()
+                ngo_nodes["name"] = ngo_nodes["name"].astype("string")
+
+                org_name_by_id = dict(zip(ngo_org["org_id"].tolist(), ngo_org["name"].tolist()))
+                node_id_by_name = dict(zip(ngo_nodes["name"].tolist(), ngo_nodes["node_mongo_id"].tolist()))
+
+                mapped = []
+                for raw in requests["requesterNode"].tolist():
+                    org_name = org_name_by_id.get(raw)
+                    mapped.append(node_id_by_name.get(org_name, raw))
+                requests["requesterNode"] = pd.Series(mapped, index=requests.index).astype(str)
+        except Exception:
+            # Mapping is best-effort; never fail feature generation.
+            pass
     requests["items"] = requests.get("items").apply(_normalize_request_items)
 
     exploded = requests.explode("items", ignore_index=True)
@@ -310,11 +406,33 @@ def _prepare_batch_features(batches: pd.DataFrame, nodes: pd.DataFrame, freq: st
     )
     summary["period_start"] = _assign_period(summary, "manufacture_date", freq)
 
+    batch_id_col = None
+    for candidate in ("batchId", "batchID", "_id", "id"):
+        if candidate in summary.columns:
+            batch_id_col = candidate
+            break
+
+    quantity_col = None
+    for candidate in ("original_quantity_kg", "initial_quantity_kg", "quantity_kg"):
+        if candidate in summary.columns:
+            quantity_col = candidate
+            break
+
+    if batch_id_col is None:
+        summary["__batch_id"] = summary.index.astype(str)
+        batch_id_col = "__batch_id"
+
+    if quantity_col is None:
+        summary["__produced_kg"] = 0.0
+        quantity_col = "__produced_kg"
+
+    summary[quantity_col] = pd.to_numeric(summary[quantity_col], errors="coerce").fillna(0.0)
+
     aggregated = (
         summary.groupby(KEY_COLUMNS, dropna=False)
         .agg(
-            produced_batches=("batchId", "nunique"),
-            produced_kg=("initial_quantity_kg", "sum"),
+            produced_batches=(batch_id_col, "nunique"),
+            produced_kg=(quantity_col, "sum"),
             avg_batch_freshness=("freshnessPct", "mean"),
             avg_shelf_life_hours=("shelf_life_hours", "mean"),
         )
@@ -325,7 +443,7 @@ def _prepare_batch_features(batches: pd.DataFrame, nodes: pd.DataFrame, freq: st
 
 
 def _load_festival_features(path: Optional[str], freq: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
-    meta: Dict[str, object] = {"source_path": path, "records": 0, "festivals": []}
+    meta: Dict[str, object] = {"source_path": path, "records": 0, "festivals": [], "mode": "none"}
     if not path:
         return pd.DataFrame(), meta
 
@@ -344,14 +462,30 @@ def _load_festival_features(path: Optional[str], freq: str) -> Tuple[pd.DataFram
 
     festival_df["period_start"] = pd.to_datetime(festival_df["period_start"], errors="coerce")
     festival_df.dropna(subset=["period_start"], inplace=True)
+
+    # We still respect the requested aggregation freq for bucketing, but we merge
+    # to operational rows by seasonality bucket (month-of-year) so the calendar
+    # generalizes beyond the single year provided in the CSV.
     festival_df["period_start"] = festival_df["period_start"].dt.to_period(freq).dt.start_time
+    if str(freq).upper() != "M":
+        LOGGER.warning(
+            "Festival seasonality generalization currently assumes monthly aggregation (freq='M'); got freq=%s. Falling back to exact period_start merge.",
+            freq,
+        )
+        meta["mode"] = "exact"
+        index_cols = KEY_COLUMNS
+    else:
+        festival_df["month_of_year"] = festival_df["period_start"].dt.month
+        meta["mode"] = "month_of_year"
+        index_cols = ["state", "district", "month_of_year"]
+
     festival_df["celebration_pct"] = pd.to_numeric(
         festival_df["celebration_pct"], errors="coerce"
     ).fillna(0.0)
 
     pivot = (
         festival_df.pivot_table(
-            index=KEY_COLUMNS,
+            index=index_cols,
             columns="festival",
             values="celebration_pct",
             aggfunc="max",
@@ -360,7 +494,9 @@ def _load_festival_features(path: Optional[str], freq: str) -> Tuple[pd.DataFram
         .reset_index()
     )
     pivot.columns = [
-        col if col in KEY_COLUMNS else f"festival_{str(col).lower().replace(' ', '_')}"
+        col
+        if col in KEY_COLUMNS or col == "month_of_year"
+        else f"festival_{str(col).lower().replace(' ', '_')}"
         for col in pivot.columns
     ]
 

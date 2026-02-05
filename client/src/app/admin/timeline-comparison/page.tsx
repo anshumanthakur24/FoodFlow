@@ -52,7 +52,13 @@ interface BackendAllocation {
   warehouse: string;
   warehouseName?: string;
   distance_km: number;
-  batches: { batchId: string; quantity: number; freshness: number }[];
+  dispatchTime?: string;
+  batches: {
+    batchId: string;
+    quantity: number;
+    freshness: number;
+    freshness_at_delivery?: number;
+  }[];
   warehouseCoords?: [number, number];
   ngoCoords?: [number, number];
   ngoName?: string;
@@ -69,6 +75,15 @@ interface BackendSimulateResponse {
   data: {
     startTime: string;
     endTime: string;
+    snapshotDate?: string;
+    mlSnapshotPayload?: {
+      freq?: string;
+      nodes?: unknown[];
+      requests?: unknown[];
+      shipments?: unknown[];
+      batches?: unknown[];
+      meta?: unknown;
+    };
     regular: BackendStrategyPayload;
     ml: BackendStrategyPayload;
   };
@@ -80,6 +95,7 @@ interface TimelineData {
   shipments: Shipment[];
   metrics: StrategyMetrics;
   totals: StrategyTotals;
+  allocations?: BackendAllocation[];
 }
 
 type MLSignalRow = {
@@ -133,12 +149,13 @@ function safePct(numer: number, denom: number) {
   return (numer / denom) * 100;
 }
 
-function fmtKg(n: number) {
-  return `${n.toFixed(1)} kg`;
-}
-
-function fmtKm(n: number) {
-  return `${n.toFixed(1)} km`;
+function fmtKgNice(n: number) {
+  if (!Number.isFinite(n)) return "0 kg";
+  const fmt = new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+    minimumFractionDigits: 1,
+  });
+  return `${fmt.format(n)} kg`;
 }
 
 function fmtScore(n: number) {
@@ -149,6 +166,16 @@ function fmtScore(n: number) {
 function asNumber(value: unknown, fallback = 0) {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function getStringProp(obj: unknown, key: string): string | null {
+  if (!isRecord(obj)) return null;
+  const raw = obj[key];
+  return typeof raw === "string" && raw ? raw : null;
 }
 
 function regionKeyOf(row: MLSignalRow) {
@@ -173,17 +200,31 @@ export default function TimelineComparisonPage() {
   const [error, setError] = useState<string | null>(null);
   const [regular, setRegular] = useState<TimelineData | null>(null);
   const [ml, setMl] = useState<TimelineData | null>(null);
+  const [mlSnapshotPayload, setMlSnapshotPayload] = useState<
+    BackendSimulateResponse["data"]["mlSnapshotPayload"] | null
+  >(null);
+  const [snapshotDateIso, setSnapshotDateIso] = useState<string | null>(null);
+
+  const [selectedDate, setSelectedDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  const [windowDays, setWindowDays] = useState<number>(7);
 
   const [signalsOpen, setSignalsOpen] = useState(false);
   const [signalsLoading, setSignalsLoading] = useState(false);
   const [signalsError, setSignalsError] = useState<string | null>(null);
   const [signals, setSignals] = useState<MLSignalRow[]>([]);
+  const [signalsScope, setSignalsScope] = useState<"snapshot" | "all">(
+    "snapshot",
+  );
   const [selectedSignalKey, setSelectedSignalKey] = useState<string | null>(
     null,
   );
   const [signalSearch, setSignalSearch] = useState("");
   const [signalFilter, setSignalFilter] = useState<MLRegionFilter>("all");
   const [signalSort, setSignalSort] = useState<MLRegionSort>("boostFirst");
+
+  const [perfMode, setPerfMode] = useState<boolean>(true);
 
   const [startTime, setStartTime] = useState<Date>(() => {
     const now = new Date();
@@ -215,6 +256,11 @@ export default function TimelineComparisonPage() {
       for (const [idx, alloc] of allocData.allocations.entries()) {
         requestedKg += alloc.required_kg || 0;
         allocatedKg += alloc.allocated_kg || 0;
+
+        const allocatedNowKg = asNumber(alloc.allocated_kg, 0);
+        if (allocatedNowKg <= 0) {
+          continue;
+        }
 
         const warehouseId = alloc.warehouse;
         const ngoId = alloc.requestId;
@@ -250,9 +296,46 @@ export default function TimelineComparisonPage() {
         const warehouseNode = nodeMap.get(warehouseId)!;
         const ngoNode = nodeMap.get(ngoId)!;
 
-        const travelHours = (alloc.distance_km || 0) / 40;
-        const start = new Date(simulationStartMs + idx * stepMs);
-        const eta = new Date(start.getTime() + travelHours * 3600 * 1000);
+        const avgSpeedKmh = 40;
+        const travelHours = (alloc.distance_km || 0) / avgSpeedKmh;
+        const breaks = Math.floor(travelHours / 4) * 0.5;
+        const totalTravelHours = travelHours + breaks;
+
+        const start = alloc.dispatchTime
+          ? new Date(alloc.dispatchTime)
+          : new Date(simulationStartMs + idx * stepMs);
+        const eta = new Date(start.getTime() + totalTravelHours * 3600 * 1000);
+
+        // Use backend's batch freshness_at_delivery if available
+        let weightedFreshness = 0;
+        let totalQty = 0;
+        let spoiledKg = 0;
+        let atRiskKg = 0;
+        for (const batch of alloc.batches || []) {
+          const qty = batch.quantity || 0;
+          if (qty <= 0) continue;
+          totalQty += qty;
+
+          const freshnessAtArrival =
+            typeof (batch as { freshness_at_delivery?: number })
+              .freshness_at_delivery === "number"
+              ? (batch as { freshness_at_delivery?: number })
+                  .freshness_at_delivery!
+              : typeof batch.freshness === "number"
+                ? batch.freshness
+                : 100;
+
+          weightedFreshness += freshnessAtArrival * qty;
+          if (freshnessAtArrival <= 0) spoiledKg += qty;
+          else if (freshnessAtArrival < 20) atRiskKg += qty;
+        }
+        const avgFreshnessAtArrival =
+          totalQty > 0 ? weightedFreshness / totalQty : 100;
+
+        // If we have no concrete batch quantity, don't create a shipment.
+        if (totalQty <= 0) {
+          continue;
+        }
 
         const shipment: Shipment = {
           id: `ship-${shipmentId++}`,
@@ -265,6 +348,11 @@ export default function TimelineComparisonPage() {
           toLng: ngoNode.lng,
           foodItem: alloc.foodType,
           value: alloc.allocated_kg,
+          quantity_kg: alloc.allocated_kg,
+          distance_km: alloc.distance_km || 0,
+          freshness_at_arrival: avgFreshnessAtArrival,
+          spoiled_kg: spoiledKg,
+          at_risk_kg: atRiskKg,
           startTime: start,
           etaTime: eta,
           arrivedTime: eta,
@@ -302,6 +390,7 @@ export default function TimelineComparisonPage() {
         shipments,
         metrics: allocData.metrics,
         totals: { requestedKg, allocatedKg },
+        allocations: allocData.allocations,
       };
     };
   }, []);
@@ -319,10 +408,23 @@ export default function TimelineComparisonPage() {
     setSignalsLoading(true);
     setSignalsError(null);
     try {
+      if (!mlSnapshotPayload) {
+        throw new Error(
+          "Simulation snapshot not loaded yet. Please wait for the simulation to load before opening ML Signals.",
+        );
+      }
+
       const response = await fetch(`${API_BASE_URL}/api/ml/sendData`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          freq: mlSnapshotPayload.freq || "M",
+          nodes: mlSnapshotPayload.nodes || [],
+          requests: mlSnapshotPayload.requests || [],
+          shipments: mlSnapshotPayload.shipments || [],
+          batches: mlSnapshotPayload.batches || [],
+          meta: mlSnapshotPayload.meta,
+        }),
       });
 
       if (!response.ok) {
@@ -351,13 +453,26 @@ export default function TimelineComparisonPage() {
     }
   };
 
+  // If the simulation snapshot changes, cached signals become invalid.
+  useEffect(() => {
+    setSignals([]);
+    setSignalsError(null);
+    setSelectedSignalKey(null);
+  }, [snapshotDateIso, mlSnapshotPayload]);
+
   useEffect(() => {
     if (!signalsOpen) return;
     if (signalsLoading) return;
     if (signals.length > 0) return;
     void fetchSignals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signalsOpen]);
+  }, [
+    signalsOpen,
+    signalsLoading,
+    signals.length,
+    snapshotDateIso,
+    mlSnapshotPayload,
+  ]);
 
   const signalsSummary = useMemo(() => {
     const total = signals.length;
@@ -379,10 +494,81 @@ export default function TimelineComparisonPage() {
     return { total, anomalies, uniqueRegions, clusterRows };
   }, [signals]);
 
+  const signalsSnapshotIso = useMemo(() => {
+    const iso =
+      snapshotDateIso ||
+      getStringProp(mlSnapshotPayload?.meta, "targetDate_iso");
+    return typeof iso === "string" && iso ? iso : null;
+  }, [snapshotDateIso, mlSnapshotPayload]);
+
+  const snapshotPayloadCounts = useMemo(() => {
+    const nodes = Array.isArray(mlSnapshotPayload?.nodes)
+      ? mlSnapshotPayload!.nodes!.length
+      : 0;
+    const requests = Array.isArray(mlSnapshotPayload?.requests)
+      ? mlSnapshotPayload!.requests!.length
+      : 0;
+    const shipments = Array.isArray(mlSnapshotPayload?.shipments)
+      ? mlSnapshotPayload!.shipments!.length
+      : 0;
+    const batches = Array.isArray(mlSnapshotPayload?.batches)
+      ? mlSnapshotPayload!.batches!.length
+      : 0;
+    return { nodes, requests, shipments, batches };
+  }, [mlSnapshotPayload]);
+
+  const effectiveSignals = useMemo(() => {
+    if (signalsScope === "all") return signals;
+
+    // Goal: show clusters/anomalies for the *simulated snapshot*, not arbitrary historical periods.
+    // When snapshot date is known, filter ML rows down to that month (freq=M).
+    const iso =
+      snapshotDateIso ||
+      getStringProp(mlSnapshotPayload?.meta, "targetDate_iso");
+    if (!iso) return signals;
+
+    const snapMs = Date.parse(iso);
+    if (!Number.isFinite(snapMs)) return signals;
+
+    const snap = new Date(snapMs);
+    const periodStart = new Date(
+      Date.UTC(snap.getUTCFullYear(), snap.getUTCMonth(), 1, 0, 0, 0, 0),
+    );
+    const nextPeriodStart = new Date(
+      Date.UTC(snap.getUTCFullYear(), snap.getUTCMonth() + 1, 1, 0, 0, 0, 0),
+    );
+
+    const startMs = periodStart.getTime();
+    const endMs = nextPeriodStart.getTime();
+    const filtered = signals.filter((r) => {
+      const ms = periodMsOf(r);
+      return ms >= startMs && ms < endMs;
+    });
+
+    return filtered;
+  }, [signals, snapshotDateIso, mlSnapshotPayload, signalsScope]);
+
+  const signalsPeriodRange = useMemo(() => {
+    if (signals.length === 0) return null;
+    let minMs = Infinity;
+    let maxMs = -Infinity;
+    for (const row of signals) {
+      const ms = periodMsOf(row);
+      if (!ms) continue;
+      if (ms < minMs) minMs = ms;
+      if (ms > maxMs) maxMs = ms;
+    }
+    if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return null;
+    return {
+      minIso: new Date(minMs).toISOString().slice(0, 10),
+      maxIso: new Date(maxMs).toISOString().slice(0, 10),
+    };
+  }, [signals]);
+
   const regionAggregates = useMemo(() => {
     const byKey = new Map<string, MLRegionAggregate>();
 
-    for (const row of signals) {
+    for (const row of effectiveSignals) {
       const key = regionKeyOf(row);
       const state = String(row.state || "Unknown");
       const district = String(row.district || "Unknown");
@@ -433,7 +619,7 @@ export default function TimelineComparisonPage() {
     }
 
     return [...byKey.values()];
-  }, [signals]);
+  }, [effectiveSignals]);
 
   const regionSummary = useMemo(() => {
     const totalRegions = regionAggregates.length;
@@ -518,33 +704,41 @@ export default function TimelineComparisonPage() {
       setIsPlaying(false);
 
       try {
-        const response = await fetch(`${API_BASE_URL}/api/history/simulate`);
+        const response = await fetch(
+          `${API_BASE_URL}/api/history/simulate?date=${encodeURIComponent(selectedDate)}&days=${encodeURIComponent(String(windowDays))}&backlog=10&dispatchMode=spread`,
+        );
         const json = (await response.json()) as BackendSimulateResponse;
         if (!json.success) {
           throw new Error("Simulation endpoint returned an error");
         }
 
-        const baseTime = new Date(json.data.startTime);
+        setMlSnapshotPayload(json.data.mlSnapshotPayload || null);
+        setSnapshotDateIso(
+          typeof json.data.snapshotDate === "string"
+            ? json.data.snapshotDate
+            : null,
+        );
+
+        const simStart = new Date(json.data.startTime);
+        const simEnd = new Date(json.data.endTime);
+        const baseTime = simStart;
         const regularData = convertToTimelineData(json.data.regular, baseTime);
         const mlData = convertToTimelineData(json.data.ml, baseTime);
         setRegular(regularData);
         setMl(mlData);
 
-        const allTimes: number[] = [];
-        for (const e of regularData.events) allTimes.push(e.time.getTime());
-        for (const e of mlData.events) allTimes.push(e.time.getTime());
-        const computedStart =
-          allTimes.length > 0
-            ? new Date(Math.min(...allTimes))
-            : new Date(baseTime.getTime() - 1000);
-        const computedEnd =
-          allTimes.length > 0
-            ? new Date(Math.max(...allTimes))
-            : new Date(baseTime.getTime() + 1000);
+        const start = Number.isFinite(simStart.getTime())
+          ? simStart
+          : new Date(baseTime.getTime() - 1000);
+        const end = Number.isFinite(simEnd.getTime())
+          ? simEnd
+          : new Date(baseTime.getTime() + 1000);
 
-        setStartTime(computedStart);
-        setEndTime(computedEnd);
-        setCurrentTime(computedStart);
+        setStartTime(start);
+        setEndTime(end);
+        // Start timeline at the beginning, not at the end
+        setCurrentTime(start);
+        setIsPlaying(false);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to load simulation",
@@ -555,44 +749,116 @@ export default function TimelineComparisonPage() {
     };
 
     run();
-  }, [convertToTimelineData]);
+  }, [convertToTimelineData, selectedDate, windowDays]);
 
+  // Dynamic metrics that update in real-time as the simulation progresses
   const kpis = useMemo(() => {
     if (!regular || !ml) return null;
 
-    const regularDelivered =
-      regular.metrics.deliveredKg ?? regular.totals.allocatedKg;
-    const mlDelivered = ml.metrics.deliveredKg ?? ml.totals.allocatedKg;
+    const currentMs = currentTime.getTime();
 
-    const regularSpoiled = regular.metrics.deliveredSpoiledKg ?? 0;
-    const mlSpoiled = ml.metrics.deliveredSpoiledKg ?? 0;
-    const foodSavedKg = regularSpoiled - mlSpoiled;
-    const spoilageReductionPct = pctDelta(regularSpoiled, mlSpoiled);
+    // Helper to compute metrics for shipments that have arrived by currentTime
+    const computeDynamicMetrics = (data: TimelineData) => {
+      const shipmentsWithQty = data.shipments.filter(
+        (s) => asNumber(s.quantity_kg, 0) > 0,
+      );
 
-    const regularAtRisk = regular.metrics.deliveredAtRiskKg ?? 0;
-    const mlAtRisk = ml.metrics.deliveredAtRiskKg ?? 0;
+      const completedShipments = shipmentsWithQty.filter(
+        (s) => s.arrivedTime && s.arrivedTime.getTime() <= currentMs,
+      );
+      const inTransitShipments = shipmentsWithQty.filter(
+        (s) =>
+          s.startTime.getTime() <= currentMs &&
+          (!s.arrivedTime || s.arrivedTime.getTime() > currentMs),
+      );
+      const pendingShipments = shipmentsWithQty.filter(
+        (s) => s.startTime.getTime() > currentMs,
+      );
 
-    const regularSpoilageRatePct = safePct(regularSpoiled, regularDelivered);
-    const mlSpoilageRatePct = safePct(mlSpoiled, mlDelivered);
+      let deliveredKg = 0;
+      let spoiledKg = 0;
+      let atRiskKg = 0;
+      let totalDistanceKm = 0;
 
-    const regularAtRiskRatePct = safePct(regularAtRisk, regularDelivered);
-    const mlAtRiskRatePct = safePct(mlAtRisk, mlDelivered);
+      for (const shipment of completedShipments) {
+        const qty = asNumber(shipment.quantity_kg, 0);
+        deliveredKg += qty;
+
+        const spoiled = asNumber(shipment.spoiled_kg, NaN);
+        const atRisk = asNumber(shipment.at_risk_kg, NaN);
+
+        if (Number.isFinite(spoiled)) {
+          spoiledKg += spoiled;
+        } else {
+          const freshness = asNumber(shipment.freshness_at_arrival, 100);
+          if (freshness <= 0) spoiledKg += qty;
+        }
+
+        if (Number.isFinite(atRisk)) {
+          atRiskKg += atRisk;
+        } else {
+          const freshness = asNumber(shipment.freshness_at_arrival, 100);
+          if (freshness > 0 && freshness < 20) atRiskKg += qty;
+        }
+
+        totalDistanceKm += asNumber(shipment.distance_km, 0);
+      }
+
+      const edibleDelivered = Math.max(0, deliveredKg - spoiledKg);
+      const freshDelivered = Math.max(0, edibleDelivered - atRiskKg);
+      const spoilageRatePct = safePct(spoiledKg, deliveredKg);
+      const atRiskRatePct = safePct(atRiskKg, deliveredKg);
+
+      return {
+        deliveredKg,
+        spoiledKg,
+        atRiskKg,
+        edibleDelivered,
+        freshDelivered,
+        spoilageRatePct,
+        atRiskRatePct,
+        totalDistanceKm,
+        completedCount: completedShipments.length,
+        inTransitCount: inTransitShipments.length,
+        pendingCount: pendingShipments.length,
+      };
+    };
+
+    const regularDynamic = computeDynamicMetrics(regular);
+    const mlDynamic = computeDynamicMetrics(ml);
+
+    const regularEdibleFulfillmentPct = safePct(
+      regularDynamic.edibleDelivered,
+      regular.totals.requestedKg,
+    );
+    const mlEdibleFulfillmentPct = safePct(
+      mlDynamic.edibleDelivered,
+      ml.totals.requestedKg,
+    );
+    const foodSavedKg = regularDynamic.spoiledKg - mlDynamic.spoiledKg;
+    const spoilageReductionPct = pctDelta(
+      regularDynamic.spoiledKg,
+      mlDynamic.spoiledKg,
+    );
 
     const savedOutOfRegularDeliveredPct = safePct(
       foodSavedKg,
-      regularDelivered,
+      regularDynamic.deliveredKg,
     );
 
-    const regularDistanceKm =
-      regular.metrics.totalDistanceKm ??
-      (regular.metrics.avgDistance ?? 0) * regular.shipments.length;
-    const mlDistanceKm =
-      ml.metrics.totalDistanceKm ??
-      (ml.metrics.avgDistance ?? 0) * ml.shipments.length;
-    const distanceReductionPct = pctDelta(regularDistanceKm, mlDistanceKm);
+    const distanceReductionPct = pctDelta(
+      regularDynamic.totalDistanceKm,
+      mlDynamic.totalDistanceKm,
+    );
 
-    const regularAvgDistanceKm = regular.metrics.avgDistance ?? 0;
-    const mlAvgDistanceKm = ml.metrics.avgDistance ?? 0;
+    const regularAvgDistanceKm =
+      regularDynamic.completedCount > 0
+        ? regularDynamic.totalDistanceKm / regularDynamic.completedCount
+        : 0;
+    const mlAvgDistanceKm =
+      mlDynamic.completedCount > 0
+        ? mlDynamic.totalDistanceKm / mlDynamic.completedCount
+        : 0;
     const avgDistanceReductionPct = pctDelta(
       regularAvgDistanceKm,
       mlAvgDistanceKm,
@@ -601,25 +867,315 @@ export default function TimelineComparisonPage() {
     return {
       foodSavedKg,
       spoilageReductionPct,
-      regularDelivered,
-      mlDelivered,
-      regularSpoiled,
-      mlSpoiled,
-      regularAtRisk,
-      mlAtRisk,
-      regularSpoilageRatePct,
-      mlSpoilageRatePct,
-      regularAtRiskRatePct,
-      mlAtRiskRatePct,
+      regularDelivered: regularDynamic.deliveredKg,
+      mlDelivered: mlDynamic.deliveredKg,
+      regularFreshDelivered: regularDynamic.freshDelivered,
+      mlFreshDelivered: mlDynamic.freshDelivered,
+      regularEdibleFulfillmentPct,
+      mlEdibleFulfillmentPct,
+      regularSpoiled: regularDynamic.spoiledKg,
+      mlSpoiled: mlDynamic.spoiledKg,
+      regularAtRisk: regularDynamic.atRiskKg,
+      mlAtRisk: mlDynamic.atRiskKg,
+      regularSpoilageRatePct: regularDynamic.spoilageRatePct,
+      mlSpoilageRatePct: mlDynamic.spoilageRatePct,
+      regularAtRiskRatePct: regularDynamic.atRiskRatePct,
+      mlAtRiskRatePct: mlDynamic.atRiskRatePct,
       savedOutOfRegularDeliveredPct,
-      regularDistanceKm,
-      mlDistanceKm,
+      regularDistanceKm: regularDynamic.totalDistanceKm,
+      mlDistanceKm: mlDynamic.totalDistanceKm,
       distanceReductionPct,
       regularAvgDistanceKm,
       mlAvgDistanceKm,
       avgDistanceReductionPct,
+      regularCompletedCount: regularDynamic.completedCount,
+      mlCompletedCount: mlDynamic.completedCount,
+      regularInTransitCount: regularDynamic.inTransitCount,
+      mlInTransitCount: mlDynamic.inTransitCount,
+      regularPendingCount: regularDynamic.pendingCount,
+      mlPendingCount: mlDynamic.pendingCount,
     };
-  }, [regular, ml]);
+  }, [regular, ml, currentTime]);
+
+  const requestedSoFarKg = useMemo(() => {
+    const nowMs = currentTime.getTime();
+    if (!Number.isFinite(nowMs)) return 0;
+
+    const requests = Array.isArray(mlSnapshotPayload?.requests)
+      ? mlSnapshotPayload!.requests!
+      : [];
+
+    let total = 0;
+    const startMs = startTime?.getTime?.() ?? NaN;
+
+    for (const r of requests) {
+      if (!r || typeof r !== "object") continue;
+
+      const createdIso = getStringProp(
+        r as Record<string, unknown>,
+        "createdOn_iso",
+      );
+      const createdMs = createdIso
+        ? Date.parse(createdIso)
+        : Number.isFinite(startMs)
+          ? startMs
+          : NaN;
+
+      if (Number.isFinite(createdMs) && createdMs > nowMs) continue;
+
+      const items = (r as Record<string, unknown>).items;
+      if (!Array.isArray(items)) continue;
+
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        total += asNumber((item as Record<string, unknown>).required_kg, 0);
+      }
+    }
+
+    return total;
+  }, [mlSnapshotPayload, startTime, currentTime]);
+
+  const snapshotSupply = useMemo(() => {
+    if (!mlSnapshotPayload?.batches) return null;
+
+    const snapMs = currentTime.getTime();
+    if (!Number.isFinite(snapMs)) return null;
+
+    let totalKg = 0;
+    let knownExpiryKg = 0;
+    let inferredExpiryKg = 0;
+    let nonExpiredKg = 0;
+    let expiringSoonKg = 0;
+    let expiredKnownKg = 0;
+    let unknownExpiryKg = 0;
+    const soonMs = snapMs + 72 * 3600 * 1000; // 72h
+
+    for (const b of mlSnapshotPayload.batches) {
+      if (!b || typeof b !== "object") continue;
+      const anyB = b as Record<string, unknown>;
+      const statusRaw =
+        typeof anyB.status === "string" ? anyB.status : "stored";
+      const status = statusRaw.toLowerCase();
+      if (status !== "stored" && status !== "reserved") continue;
+
+      const qty = asNumber(anyB.quantity_kg, 0);
+      if (qty <= 0) continue;
+
+      // Inventory can increase during the simulation window as new batches arrive.
+      // Only count batches that are available by currentTime.
+      const availableRaw =
+        typeof anyB.manufacture_date === "string"
+          ? anyB.manufacture_date
+          : typeof anyB.createdAt === "string"
+            ? anyB.createdAt
+            : null;
+      const availableMs = availableRaw ? Date.parse(availableRaw) : NaN;
+      if (Number.isFinite(availableMs) && availableMs > snapMs) {
+        continue;
+      }
+
+      totalKg += qty;
+
+      const expiryRaw =
+        typeof anyB.expiry_iso === "string" ? anyB.expiry_iso : null;
+      let expiryMs = expiryRaw ? Date.parse(expiryRaw) : NaN;
+      let expiryKind: "known" | "inferred" | "unknown" = "unknown";
+
+      if (Number.isFinite(expiryMs)) {
+        expiryKind = "known";
+      } else {
+        const manufRaw =
+          typeof anyB.manufacture_date === "string"
+            ? anyB.manufacture_date
+            : null;
+        const shelfLifeHours = asNumber(anyB.shelf_life_hours, NaN);
+        const manufMs = manufRaw ? Date.parse(manufRaw) : NaN;
+        if (Number.isFinite(manufMs) && Number.isFinite(shelfLifeHours)) {
+          expiryMs = manufMs + shelfLifeHours * 3600 * 1000;
+          expiryKind = "inferred";
+        }
+      }
+
+      if (!Number.isFinite(expiryMs)) {
+        unknownExpiryKg += qty;
+        continue;
+      }
+
+      if (expiryKind === "known") knownExpiryKg += qty;
+      if (expiryKind === "inferred") inferredExpiryKg += qty;
+
+      if (expiryMs >= snapMs) {
+        nonExpiredKg += qty;
+        if (expiryMs <= soonMs) expiringSoonKg += qty;
+      } else {
+        expiredKnownKg += qty;
+      }
+    }
+
+    const usableSharePct = safePct(nonExpiredKg, totalKg);
+    return {
+      totalKg,
+      knownExpiryKg,
+      inferredExpiryKg,
+      nonExpiredKg,
+      expiringSoonKg,
+      expiredKnownKg,
+      unknownExpiryKg,
+      usableSharePct,
+    };
+  }, [mlSnapshotPayload?.batches, currentTime]);
+
+  const inventoryRemaining = useMemo(() => {
+    if (!snapshotSupply || !regular || !ml) return null;
+
+    const nowMs = currentTime.getTime();
+
+    const movedKg = (data: TimelineData) => {
+      let moved = 0;
+      const ships = Array.isArray(data.shipments) ? data.shipments : [];
+      for (const s of ships) {
+        const startMs = s?.startTime?.getTime?.() ?? null;
+        if (typeof startMs === "number" && startMs <= nowMs) {
+          moved += asNumber(s.quantity_kg, 0);
+        }
+      }
+      return moved;
+    };
+
+    const total = snapshotSupply.totalKg;
+    const regularRemainingKg = Math.max(0, total - movedKg(regular));
+    const mlRemainingKg = Math.max(0, total - movedKg(ml));
+
+    return { totalKg: total, regularRemainingKg, mlRemainingKg };
+  }, [snapshotSupply, regular, ml, currentTime]);
+
+  const inventoryByStrategy = useMemo(() => {
+    if (!mlSnapshotPayload?.batches || !regular || !ml) return null;
+
+    const nowMs = currentTime.getTime();
+    if (!Number.isFinite(nowMs)) return null;
+
+    const soonMs = nowMs + 72 * 3600 * 1000;
+
+    type UsedBatch = { batchId?: unknown; quantity?: unknown };
+    type AllocLike = { dispatchTime?: string; batches?: UsedBatch[] };
+
+    const movedByBatchId = (allocations: AllocLike[]) => {
+      const moved = new Map<string, number>();
+      for (const alloc of allocations || []) {
+        const dispatchMs = alloc?.dispatchTime
+          ? Date.parse(alloc.dispatchTime)
+          : NaN;
+        if (Number.isFinite(dispatchMs) && dispatchMs > nowMs) continue;
+
+        for (const used of alloc?.batches || []) {
+          const qty = asNumber(used?.quantity, 0);
+          if (qty <= 0) continue;
+
+          const idRaw = used?.batchId;
+          const id =
+            typeof idRaw === "string"
+              ? idRaw
+              : idRaw &&
+                  typeof (idRaw as { toString?: unknown }).toString ===
+                    "function"
+                ? String((idRaw as { toString: () => string }).toString())
+                : String(idRaw);
+
+          moved.set(id, (moved.get(id) || 0) + qty);
+        }
+      }
+      return moved;
+    };
+
+    const computeRemainingSnapshot = (allocations: AllocLike[]) => {
+      const moved = movedByBatchId(allocations);
+
+      let totalKg = 0;
+      let nonExpiredKg = 0;
+      let expiringSoonKg = 0;
+      let expiredKg = 0;
+      let unknownExpiryKg = 0;
+
+      for (const b of mlSnapshotPayload.batches || []) {
+        if (!b || typeof b !== "object") continue;
+        const anyB = b as Record<string, unknown>;
+
+        const statusRaw =
+          typeof anyB.status === "string" ? anyB.status : "stored";
+        const status = statusRaw.toLowerCase();
+        if (status !== "stored" && status !== "reserved") continue;
+
+        const idRaw = anyB._id;
+        const id =
+          typeof idRaw === "string"
+            ? idRaw
+            : idRaw &&
+                typeof (idRaw as { toString?: unknown }).toString === "function"
+              ? String((idRaw as { toString: () => string }).toString())
+              : String(idRaw);
+
+        const baseQty = asNumber(anyB.quantity_kg, 0);
+        if (baseQty <= 0) continue;
+
+        const availableRaw =
+          typeof anyB.manufacture_date === "string"
+            ? anyB.manufacture_date
+            : typeof anyB.createdAt === "string"
+              ? anyB.createdAt
+              : null;
+        const availableMs = availableRaw ? Date.parse(availableRaw) : NaN;
+        if (Number.isFinite(availableMs) && availableMs > nowMs) continue;
+
+        const remainingQty = Math.max(0, baseQty - (moved.get(id) || 0));
+        if (remainingQty <= 0) continue;
+
+        totalKg += remainingQty;
+
+        const expiryRaw =
+          typeof anyB.expiry_iso === "string" ? anyB.expiry_iso : null;
+        let expiryMs = expiryRaw ? Date.parse(expiryRaw) : NaN;
+        if (!Number.isFinite(expiryMs)) {
+          const manufRaw =
+            typeof anyB.manufacture_date === "string"
+              ? anyB.manufacture_date
+              : null;
+          const shelfLifeHours = asNumber(anyB.shelf_life_hours, NaN);
+          const manufMs = manufRaw ? Date.parse(manufRaw) : NaN;
+          if (Number.isFinite(manufMs) && Number.isFinite(shelfLifeHours)) {
+            expiryMs = manufMs + shelfLifeHours * 3600 * 1000;
+          }
+        }
+
+        if (!Number.isFinite(expiryMs)) {
+          unknownExpiryKg += remainingQty;
+          continue;
+        }
+
+        if (expiryMs >= nowMs) {
+          nonExpiredKg += remainingQty;
+          if (expiryMs <= soonMs) expiringSoonKg += remainingQty;
+        } else {
+          expiredKg += remainingQty;
+        }
+      }
+
+      return {
+        totalKg,
+        nonExpiredKg,
+        expiringSoonKg,
+        expiredKg,
+        unknownExpiryKg,
+      };
+    };
+
+    return {
+      regular: computeRemainingSnapshot(
+        (regular.allocations as AllocLike[]) || [],
+      ),
+      ml: computeRemainingSnapshot((ml.allocations as AllocLike[]) || []),
+    };
+  }, [mlSnapshotPayload?.batches, regular, ml, currentTime]);
 
   return (
     <div className="min-h-screen bg-zinc-50">
@@ -653,6 +1209,51 @@ export default function TimelineComparisonPage() {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-6">
+        <div className="bg-white rounded-lg border border-zinc-200 p-4 mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex flex-col md:flex-row md:items-center gap-3">
+            <label className="text-sm text-zinc-700" htmlFor="snapshot-date">
+              Snapshot date
+            </label>
+            <input
+              id="snapshot-date"
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="text-sm px-2 py-1.5 rounded-md border border-zinc-200 bg-white"
+              max={new Date().toISOString().slice(0, 10)}
+            />
+
+            <label className="text-sm text-zinc-700" htmlFor="window-days">
+              Window (days)
+            </label>
+            <input
+              id="window-days"
+              type="number"
+              value={windowDays}
+              onChange={(e) => setWindowDays(asNumber(e.target.value, 7))}
+              min={7}
+              max={31}
+              step={1}
+              className="text-sm w-24 px-2 py-1.5 rounded-md border border-zinc-200 bg-white"
+            />
+
+            <span className="text-xs text-zinc-500">Refetches simulation</span>
+          </div>
+
+          <label className="flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              checked={perfMode}
+              onChange={(e) => setPerfMode(e.target.checked)}
+              className="h-4 w-4 accent-zinc-900"
+            />
+            Performance mode
+            <span className="text-xs text-zinc-500">
+              (faster map, clustered nodes)
+            </span>
+          </label>
+        </div>
+
         {/* Status */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
@@ -674,206 +1275,214 @@ export default function TimelineComparisonPage() {
           </div>
         )}
 
-        {/* KPI row */}
-        {regular && ml && kpis && (
-          <div className="space-y-4 mb-6">
+        {/* SIMPLE KPI DASHBOARD */}
+        {regular && ml && kpis && snapshotSupply && (
+          <div className="mb-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-emerald-50 rounded-lg border border-emerald-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-emerald-900/70">
-                  Food Saved (less spoiled at delivery)
-                </div>
-                <div className="mt-2 flex items-end justify-between">
-                  <div>
-                    <div className="text-sm text-emerald-900/70">Saved</div>
-                    <div className="text-2xl font-semibold text-emerald-900">
-                      {fmtKg(kpis.foodSavedKg)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-emerald-900/70">Reduction</div>
-                    <div className="text-2xl font-semibold text-emerald-900">
-                      {kpis.spoilageReductionPct.toFixed(1)}%
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-3 text-sm text-emerald-900/80 space-y-1">
-                  <div>
-                    Out of{" "}
-                    <span className="font-medium">
-                      {fmtKg(kpis.regularSpoiled)}
-                    </span>{" "}
-                    that Regular would spoil @ delivery
-                  </div>
-                  <div>
-                    That’s{" "}
-                    <span className="font-medium">
-                      {pct(kpis.savedOutOfRegularDeliveredPct)}
-                    </span>{" "}
-                    of Regular delivered volume
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-zinc-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Spoiled @ Delivery
-                </div>
-                <div className="mt-2 flex items-end justify-between">
-                  <div>
-                    <div className="text-sm text-zinc-500">Regular</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {fmtKg(kpis.regularSpoiled)}
-                    </div>
-                    <div className="text-xs text-zinc-500">
-                      {pct(kpis.regularSpoilageRatePct)} of delivered
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-zinc-500">ML</div>
-                    <div className="text-lg font-semibold text-emerald-700">
-                      {fmtKg(kpis.mlSpoiled)}
-                    </div>
-                    <div className="text-xs text-zinc-500">
-                      {pct(kpis.mlSpoilageRatePct)} of delivered
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-zinc-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Delivered Freshness (kg-weighted)
-                </div>
-                <div className="mt-2 flex items-end justify-between">
-                  <div>
-                    <div className="text-sm text-zinc-500">Regular</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {(regular.metrics.deliveredAvgFreshness ?? 0).toFixed(1)}%
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-zinc-500">ML</div>
-                    <div className="text-lg font-semibold text-emerald-700">
-                      {(ml.metrics.deliveredAvgFreshness ?? 0).toFixed(1)}%
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               <div className="bg-white rounded-lg border border-zinc-200 p-4">
                 <div className="text-xs uppercase tracking-wide text-zinc-500">
                   Total Requested
                 </div>
-                <div className="mt-2 flex items-end justify-between">
+                <div className="mt-2 text-2xl font-semibold text-zinc-900">
+                  {fmtKgNice(requestedSoFarKg)}
+                </div>
+                <div className="mt-3 text-[11px] text-zinc-600 space-y-1">
                   <div>
-                    <div className="text-sm text-zinc-500">Same scenario</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {fmtKg(regular.totals.requestedKg)}
-                    </div>
+                    Outstanding (Regular):{" "}
+                    <span className="font-medium text-zinc-900">
+                      {fmtKgNice(
+                        Math.max(
+                          0,
+                          requestedSoFarKg -
+                            Math.max(
+                              0,
+                              asNumber(kpis.regularDelivered, 0) -
+                                asNumber(kpis.regularSpoiled, 0),
+                            ),
+                        ),
+                      )}
+                    </span>
                   </div>
-                </div>
-                <div className="text-xs text-zinc-500 mt-1">
-                  Used for both strategies
-                </div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-zinc-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Total Delivered
-                </div>
-                <div className="mt-2 flex items-end justify-between">
                   <div>
-                    <div className="text-sm text-zinc-500">Regular</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {fmtKg(kpis.regularDelivered)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-zinc-500">ML</div>
-                    <div className="text-lg font-semibold text-emerald-700">
-                      {fmtKg(kpis.mlDelivered)}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white rounded-lg border border-zinc-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Fulfillment
-                </div>
-                <div className="mt-2 flex items-end justify-between">
-                  <div>
-                    <div className="text-sm text-zinc-500">Regular</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {pct(regular.metrics.fulfillmentRate)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-zinc-500">ML</div>
-                    <div className="text-lg font-semibold text-emerald-700">
-                      {pct(ml.metrics.fulfillmentRate)}
-                    </div>
+                    Outstanding (ML):{" "}
+                    <span className="font-medium text-zinc-900">
+                      {fmtKgNice(
+                        Math.max(
+                          0,
+                          requestedSoFarKg -
+                            Math.max(
+                              0,
+                              asNumber(kpis.mlDelivered, 0) -
+                                asNumber(kpis.mlSpoiled, 0),
+                            ),
+                        ),
+                      )}
+                    </span>
                   </div>
                 </div>
               </div>
 
               <div className="bg-white rounded-lg border border-zinc-200 p-4">
                 <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  At-Risk Delivered (&lt;20% freshness)
+                  Inventory Now (Regular vs ML)
                 </div>
-                <div className="mt-2 flex items-end justify-between">
-                  <div>
-                    <div className="text-sm text-zinc-500">Regular</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {fmtKg(kpis.regularAtRisk)}
+                <div className="mt-2 grid grid-cols-2 gap-3">
+                  <div className="rounded-md border border-zinc-100 p-3">
+                    <div className="text-xs text-zinc-500">Regular</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-900">
+                      {fmtKgNice(
+                        inventoryByStrategy?.regular.totalKg ??
+                          inventoryRemaining?.regularRemainingKg ??
+                          snapshotSupply.totalKg,
+                      )}
                     </div>
-                    <div className="text-xs text-zinc-500">
-                      {pct(kpis.regularAtRiskRatePct)} of delivered
+                    <div className="mt-2 text-[11px] text-zinc-500 space-y-1">
+                      <div>
+                        Unexpired:{" "}
+                        <span className="font-medium text-emerald-700">
+                          {fmtKgNice(
+                            inventoryByStrategy?.regular.nonExpiredKg ?? 0,
+                          )}
+                        </span>
+                      </div>
+                      <div>
+                        Expiring ≤72h:{" "}
+                        <span className="font-medium text-amber-700">
+                          {fmtKgNice(
+                            inventoryByStrategy?.regular.expiringSoonKg ?? 0,
+                          )}
+                        </span>
+                      </div>
+                      <div>
+                        Already expired:{" "}
+                        <span className="font-medium text-red-700">
+                          {fmtKgNice(
+                            inventoryByStrategy?.regular.expiredKg ?? 0,
+                          )}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-sm text-zinc-500">ML</div>
-                    <div className="text-lg font-semibold text-emerald-700">
-                      {fmtKg(kpis.mlAtRisk)}
+
+                  <div className="rounded-md border border-zinc-100 p-3">
+                    <div className="text-xs text-zinc-500">ML</div>
+                    <div className="mt-1 text-lg font-semibold text-zinc-900">
+                      {fmtKgNice(
+                        inventoryByStrategy?.ml.totalKg ??
+                          inventoryRemaining?.mlRemainingKg ??
+                          snapshotSupply.totalKg,
+                      )}
                     </div>
-                    <div className="text-xs text-zinc-500">
-                      {pct(kpis.mlAtRiskRatePct)} of delivered
+                    <div className="mt-2 text-[11px] text-zinc-500 space-y-1">
+                      <div>
+                        Unexpired:{" "}
+                        <span className="font-medium text-emerald-700">
+                          {fmtKgNice(inventoryByStrategy?.ml.nonExpiredKg ?? 0)}
+                        </span>
+                      </div>
+                      <div>
+                        Expiring ≤72h:{" "}
+                        <span className="font-medium text-amber-700">
+                          {fmtKgNice(
+                            inventoryByStrategy?.ml.expiringSoonKg ?? 0,
+                          )}
+                        </span>
+                      </div>
+                      <div>
+                        Already expired:{" "}
+                        <span className="font-medium text-red-700">
+                          {fmtKgNice(inventoryByStrategy?.ml.expiredKg ?? 0)}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
 
               <div className="bg-white rounded-lg border border-zinc-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Distance (avg / shipment)
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-xs uppercase tracking-wide text-zinc-500">
+                    Delivered (Fresh vs Expired in Transport)
+                  </div>
+                  <div className="text-[11px] px-2 py-1 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-800 whitespace-nowrap">
+                    Food saved: {kpis.spoilageReductionPct.toFixed(1)}%
+                  </div>
                 </div>
-                <div className="mt-2 flex items-end justify-between">
+                <div className="mt-2 grid grid-cols-2 gap-3">
                   <div>
-                    <div className="text-sm text-zinc-500">Regular</div>
-                    <div className="text-lg font-semibold text-zinc-900">
-                      {fmtKm(kpis.regularAvgDistanceKm)}
+                    <div className="text-xs text-zinc-500">Regular</div>
+                    <div className="mt-1">
+                      <div className="text-[11px] text-zinc-500">
+                        Fresh delivered
+                      </div>
+                      <div className="text-lg font-semibold text-zinc-900">
+                        {fmtKgNice(kpis.regularFreshDelivered)}
+                      </div>
+                      <div className="text-[11px] text-zinc-500">
+                        {pct(
+                          safePct(
+                            kpis.regularFreshDelivered,
+                            snapshotSupply.totalKg,
+                          ),
+                        )}{" "}
+                        of inventory
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm text-zinc-500">ML</div>
-                    <div className="text-lg font-semibold text-emerald-700">
-                      {fmtKm(kpis.mlAvgDistanceKm)}
-                    </div>
-                    <div className="text-xs text-zinc-500">
-                      {kpis.avgDistanceReductionPct >= 0 ? "-" : "+"}
-                      {Math.abs(kpis.avgDistanceReductionPct).toFixed(1)}%
-                    </div>
-                  </div>
-                </div>
 
-                <div className="mt-2 text-xs text-zinc-500 flex items-center justify-between">
-                  <span>Total (sum)</span>
-                  <span>
-                    {fmtKm(kpis.regularDistanceKm)} → {fmtKm(kpis.mlDistanceKm)}
-                  </span>
+                    <div className="mt-2 pt-2 border-t border-zinc-100">
+                      <div className="text-[11px] text-zinc-500">
+                        Expired in transport
+                      </div>
+                      <div className="text-base font-semibold text-red-700">
+                        {fmtKgNice(kpis.regularSpoiled)}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 pt-2 border-t border-zinc-100">
+                      <div className="text-[10px] text-zinc-400 space-y-0.5">
+                        <div>✅ Delivered: {kpis.regularCompletedCount}</div>
+                        <div>🚚 In Transit: {kpis.regularInTransitCount}</div>
+                        <div>⏳ Pending: {kpis.regularPendingCount}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-zinc-500">ML</div>
+                    <div className="mt-1">
+                      <div className="text-[11px] text-zinc-500">
+                        Fresh delivered
+                      </div>
+                      <div className="text-lg font-semibold text-emerald-700">
+                        {fmtKgNice(kpis.mlFreshDelivered)}
+                      </div>
+                      <div className="text-[11px] text-zinc-500">
+                        {pct(
+                          safePct(
+                            kpis.mlFreshDelivered,
+                            snapshotSupply.totalKg,
+                          ),
+                        )}{" "}
+                        of inventory
+                      </div>
+                    </div>
+
+                    <div className="mt-2 pt-2 border-t border-zinc-100">
+                      <div className="text-[11px] text-zinc-500">
+                        Expired in transport
+                      </div>
+                      <div className="text-base font-semibold text-red-700">
+                        {fmtKgNice(kpis.mlSpoiled)}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 pt-2 border-t border-zinc-100">
+                      <div className="text-[10px] text-zinc-400 space-y-0.5">
+                        <div>✅ Delivered: {kpis.mlCompletedCount}</div>
+                        <div>🚚 In Transit: {kpis.mlInTransitCount}</div>
+                        <div>⏳ Pending: {kpis.mlPendingCount}</div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -881,82 +1490,16 @@ export default function TimelineComparisonPage() {
         )}
 
         {/* Notes */}
-        <div className="bg-white rounded-lg border border-zinc-200 p-4 mb-6">
-          <div className="text-sm font-medium text-zinc-900 mb-2">
+        <details className="bg-white rounded-lg border border-zinc-200 p-4 mb-6">
+          <summary className="cursor-pointer text-sm font-medium text-zinc-900">
             What “ML” means on this page
-          </div>
-          <ul className="text-sm text-zinc-600 list-disc pl-5 space-y-1">
+          </summary>
+          <ul className="mt-3 text-sm text-zinc-600 list-disc pl-5 space-y-1">
             {notes.map((n, idx) => (
               <li key={idx}>{n}</li>
             ))}
           </ul>
-
-          {regular && ml && kpis && (
-            <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3">
-              <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Why ML improves outcomes
-                </div>
-                <div className="mt-2 text-sm text-zinc-700 space-y-1">
-                  <div>
-                    • Prefers batches that will still be fresh at ETA (spoilage
-                    ↓).
-                  </div>
-                  <div>
-                    • Strongly prefers closer warehouses (distance caps +
-                    decay).
-                  </div>
-                  <div>
-                    • Uses anomaly signals to slightly boost urgency where
-                    demand may spike.
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                <div className="text-xs uppercase tracking-wide text-emerald-900/70">
-                  ML impact at a glance
-                </div>
-                <div className="mt-2 text-sm text-emerald-900/90 space-y-1">
-                  <div>
-                    • Food saved:{" "}
-                    <span className="font-medium">
-                      {fmtKg(kpis.foodSavedKg)}
-                    </span>
-                  </div>
-                  <div>
-                    • Spoilage reduction:{" "}
-                    <span className="font-medium">
-                      {kpis.spoilageReductionPct.toFixed(1)}%
-                    </span>
-                  </div>
-                  <div>
-                    • Avg distance change:{" "}
-                    <span className="font-medium">
-                      {kpis.avgDistanceReductionPct >= 0 ? "-" : "+"}
-                      {Math.abs(kpis.avgDistanceReductionPct).toFixed(1)}%
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-zinc-200 bg-white p-3">
-                <div className="text-xs uppercase tracking-wide text-zinc-500">
-                  Urgency boost (signal → action)
-                </div>
-                <div className="mt-2 text-sm text-zinc-700">
-                  If a region is anomalous, allocation scoring applies:
-                  <div className="mt-2 font-mono text-xs bg-zinc-50 border border-zinc-200 rounded p-2">
-                    urgencyBoost = is_anomaly ? 1.1 : 1.0
-                  </div>
-                  <div className="mt-2 text-xs text-zinc-500">
-                    Open “ML Signals” to inspect clusters/anomalies per region.
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        </details>
 
         {/* Maps */}
         {regular && ml && (
@@ -984,6 +1527,7 @@ export default function TimelineComparisonPage() {
                   currentTime={currentTime}
                   startTime={startTime}
                   endTime={endTime}
+                  performanceMode={perfMode}
                 />
               </div>
             </section>
@@ -1011,6 +1555,7 @@ export default function TimelineComparisonPage() {
                   currentTime={currentTime}
                   startTime={startTime}
                   endTime={endTime}
+                  performanceMode={perfMode}
                 />
               </div>
             </section>
@@ -1072,8 +1617,15 @@ export default function TimelineComparisonPage() {
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
                   <div className="text-xs text-zinc-500">Rows</div>
                   <div className="text-lg font-semibold text-zinc-900">
-                    {signalsSummary.total}
+                    {signalsScope === "snapshot"
+                      ? effectiveSignals.length
+                      : signalsSummary.total}
                   </div>
+                  {signalsScope === "snapshot" && (
+                    <div className="text-[11px] text-zinc-500">
+                      of {signalsSummary.total} returned
+                    </div>
+                  )}
                 </div>
                 <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
                   <div className="text-xs text-zinc-500">Regions</div>
@@ -1175,6 +1727,94 @@ export default function TimelineComparisonPage() {
                   Loading ML signals…
                 </div>
               )}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-zinc-600">
+                <div className="flex items-center gap-2">
+                  <span className="text-zinc-500">Scope</span>
+                  <div className="inline-flex rounded-md border border-zinc-200 overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setSignalsScope("snapshot")}
+                      className={`px-2.5 py-1.5 ${
+                        signalsScope === "snapshot"
+                          ? "bg-zinc-100 text-zinc-900"
+                          : "bg-white text-zinc-600 hover:bg-zinc-50"
+                      }`}
+                      title="Show only the simulation snapshot month"
+                    >
+                      Snapshot month
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSignalsScope("all")}
+                      className={`px-2.5 py-1.5 border-l border-zinc-200 ${
+                        signalsScope === "all"
+                          ? "bg-zinc-100 text-zinc-900"
+                          : "bg-white text-zinc-600 hover:bg-zinc-50"
+                      }`}
+                      title="Show all periods returned by the ML service"
+                    >
+                      All periods
+                    </button>
+                  </div>
+                </div>
+
+                <div className="ml-auto flex flex-wrap items-center gap-3">
+                  {signalsSnapshotIso && (
+                    <span>
+                      Snapshot as-of:{" "}
+                      <span className="text-zinc-900">
+                        {signalsSnapshotIso.slice(0, 10)}
+                      </span>
+                    </span>
+                  )}
+                  {mlSnapshotPayload && (
+                    <span>
+                      Snapshot payload:{" "}
+                      <span className="text-zinc-900">
+                        {snapshotPayloadCounts.nodes}
+                      </span>{" "}
+                      nodes,{" "}
+                      <span className="text-zinc-900">
+                        {snapshotPayloadCounts.requests}
+                      </span>{" "}
+                      requests,{" "}
+                      <span className="text-zinc-900">
+                        {snapshotPayloadCounts.shipments}
+                      </span>{" "}
+                      shipments,{" "}
+                      <span className="text-zinc-900">
+                        {snapshotPayloadCounts.batches}
+                      </span>{" "}
+                      batches
+                    </span>
+                  )}
+                  {signalsPeriodRange && (
+                    <span>
+                      Returned range:{" "}
+                      <span className="text-zinc-900">
+                        {signalsPeriodRange.minIso}
+                      </span>{" "}
+                      →{" "}
+                      <span className="text-zinc-900">
+                        {signalsPeriodRange.maxIso}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {signalsScope === "snapshot" &&
+                !signalsLoading &&
+                signals.length > 0 &&
+                effectiveSignals.length === 0 && (
+                  <div className="mt-3 text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded p-3">
+                    No ML rows matched the snapshot month. Switch Scope →
+                    &quot;All periods&quot; to inspect what the ML service
+                    returned, or check that the snapshot payload contains valid
+                    ISO dates.
+                  </div>
+                )}
             </div>
 
             <div className="flex-1 overflow-auto">

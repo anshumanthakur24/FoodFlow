@@ -42,9 +42,31 @@ const safeRemainingShelfLifeHours = (batch, currentDate) => {
  * - FIFO batch selection (oldest first)
  * - Reactive: only responds to existing requests
  */
-export async function allocateRegular(requests, batches, warehouses, ngos) {
+export async function allocateRegular(
+  requests,
+  batches,
+  warehouses,
+  ngos,
+  options = {}
+) {
   const allocations = [];
   const unusedBatches = [...batches];
+
+  const dispatchTimeFloorRaw = options?.dispatchTimeFloor;
+  const dispatchTimeFloor = dispatchTimeFloorRaw
+    ? new Date(dispatchTimeFloorRaw)
+    : null;
+  const hasDispatchFloor =
+    dispatchTimeFloor instanceof Date &&
+    !Number.isNaN(dispatchTimeFloor.getTime());
+
+  const dispatchTimeCeilRaw = options?.dispatchTimeCeil;
+  const dispatchTimeCeil = dispatchTimeCeilRaw
+    ? new Date(dispatchTimeCeilRaw)
+    : null;
+  const hasDispatchCeil =
+    dispatchTimeCeil instanceof Date &&
+    !Number.isNaN(dispatchTimeCeil.getTime());
 
   // Fetch NGO organizations to map request.requesterNode (NGO ID) to Node
   const ngoOrgs = await NGO.find().lean();
@@ -68,7 +90,32 @@ export async function allocateRegular(requests, batches, warehouses, ngos) {
     `[allocateRegular] Starting with ${requests.length} requests, ${ngoOrgs.length} NGO orgs, ${ngos.length} NGO nodes`
   );
 
+  const estimateTravelHours = (distanceKm) => {
+    const avgSpeedKmh = 40;
+    const baseHours = (Number(distanceKm) || 0) / avgSpeedKmh;
+    const breaks = Math.floor(baseHours / 4) * 0.5;
+    return baseHours + breaks;
+  };
+
   for (const request of requests) {
+    let dispatchTime = request?.dispatchTime
+      ? new Date(request.dispatchTime)
+      : request?.createdOn
+        ? new Date(request.createdOn)
+        : new Date();
+    if (
+      hasDispatchFloor &&
+      dispatchTime.getTime() < dispatchTimeFloor.getTime()
+    ) {
+      dispatchTime = dispatchTimeFloor;
+    }
+    if (
+      hasDispatchCeil &&
+      dispatchTime.getTime() > dispatchTimeCeil.getTime()
+    ) {
+      dispatchTime = dispatchTimeCeil;
+    }
+
     // Find NGO organization
     const ngoOrg = ngoOrgs.find(
       (org) => org._id.toString() === request.requesterNode.toString()
@@ -97,63 +144,127 @@ export async function allocateRegular(requests, batches, warehouses, ngos) {
       `[allocateRegular]  NGO location: [${ngoNode.location.coordinates.join(", ")}], warehouses: ${warehouses.length}`
     );
 
-    // Find nearest warehouse
-    let nearestWarehouse = null;
-    let minDistance = Infinity;
+    // Precompute warehouse distances once per request.
+    const warehousesByDistance = (warehouses || [])
+      .map((warehouse) => {
+        const distance = haversineDistanceKm(
+          {
+            lat: ngoNode.location.coordinates[1],
+            lon: ngoNode.location.coordinates[0],
+          },
+          {
+            lat: warehouse.location.coordinates[1],
+            lon: warehouse.location.coordinates[0],
+          }
+        );
+        return { warehouse, distance };
+      })
+      .sort((a, b) => a.distance - b.distance);
 
-    for (const warehouse of warehouses) {
-      debugAlloc(`[allocateRegular]  Checking warehouse ${warehouse.name}...`);
-      debugAlloc(
-        `[allocateRegular]    Warehouse location object:`,
-        warehouse.location
-      );
-      debugAlloc(
-        `[allocateRegular]    Warehouse coords: [${warehouse.location?.coordinates?.join(", ") || "MISSING"}]`
-      );
-      const distance = haversineDistanceKm(
-        {
-          lat: ngoNode.location.coordinates[1],
-          lon: ngoNode.location.coordinates[0],
-        },
-        {
-          lat: warehouse.location.coordinates[1],
-          lon: warehouse.location.coordinates[0],
-        }
-      );
-      debugAlloc(`[allocateRegular]    Distance: ${distance.toFixed(2)} km`);
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearestWarehouse = warehouse;
-      }
-    }
-
-    if (!nearestWarehouse) {
-      debugAlloc(
-        `[allocateRegular] No warehouse found for NGO ${ngoNode.name}`
-      );
+    if (warehousesByDistance.length === 0) {
+      debugAlloc(`[allocateRegular] No warehouses available for request`);
       continue;
     }
 
-    debugAlloc(
-      `[allocateRegular]  Nearest warehouse: ${nearestWarehouse.name} (${minDistance.toFixed(2)} km away)`
-    );
-
     // FIFO allocation for each item
     for (const item of request.items) {
+      // Pick the nearest warehouse that has at least one eligible batch for this foodType.
+      let sourceWarehouse = null;
+      let sourceDistanceKm = Infinity;
+
+      for (const { warehouse, distance } of warehousesByDistance) {
+        const hasEligible = unusedBatches.some((b) => {
+          if (b.foodType !== item.foodType) return false;
+          if (b.status !== "stored") return false;
+          if (b.currentNode.toString() !== warehouse._id.toString())
+            return false;
+
+          // Availability: manufacture_date is the real-world timestamp; createdAt is DB insertion time
+          // (often much later for imported datasets), so only use createdAt if manufacture_date is missing.
+          const availRaw = b.manufacture_date || b.createdAt || null;
+          if (availRaw) {
+            const availMs = new Date(availRaw).getTime();
+            if (Number.isFinite(availMs) && availMs > dispatchTime.getTime()) {
+              return false;
+            }
+          }
+
+          const remainingHours = safeRemainingShelfLifeHours(b, dispatchTime);
+          if (!(remainingHours > 0)) return false;
+          const freshnessAtDispatch = calculateFreshnessPct(b, dispatchTime);
+          return (
+            Number.isFinite(freshnessAtDispatch) && freshnessAtDispatch > 0
+          );
+        });
+
+        if (hasEligible) {
+          sourceWarehouse = warehouse;
+          sourceDistanceKm = distance;
+          break;
+        }
+      }
+
+      if (!sourceWarehouse) {
+        debugAlloc(
+          `[allocateRegular]   Item: ${item.foodType}, need ${item.required_kg}kg - no eligible batches in any warehouse`
+        );
+        continue;
+      }
+
       debugAlloc(
-        `[allocateRegular]   Item: ${item.foodType}, need ${item.required_kg}kg from warehouse ${nearestWarehouse.name}`
+        `[allocateRegular]   Item: ${item.foodType}, need ${item.required_kg}kg from warehouse ${sourceWarehouse.name} (${sourceDistanceKm.toFixed(2)} km)`
       );
 
       const availableBatches = unusedBatches
         .filter(
           (b) =>
             b.foodType === item.foodType &&
-            b.currentNode.toString() === nearestWarehouse._id.toString() &&
-            b.status === "stored"
+            b.currentNode.toString() === sourceWarehouse._id.toString() &&
+            b.status === "stored" &&
+            (() => {
+              const availRaw = b.manufacture_date || b.createdAt || null;
+              if (!availRaw) return true;
+              const availMs = new Date(availRaw).getTime();
+              return (
+                !Number.isFinite(availMs) || availMs <= dispatchTime.getTime()
+              );
+            })()
         )
-        .sort(
-          (a, b) => new Date(a.manufacture_date) - new Date(b.manufacture_date)
-        ); // Oldest first
+        .map((b) => ({
+          batch: b,
+          remainingHours: safeRemainingShelfLifeHours(b, dispatchTime),
+          freshnessAtDispatch: calculateFreshnessPct(b, dispatchTime),
+        }))
+        // Baseline: only require not spoiled at dispatch; it may expire during transport.
+        .filter(
+          (x) =>
+            x.remainingHours > 0 &&
+            Number.isFinite(x.freshnessAtDispatch) &&
+            x.freshnessAtDispatch > 0
+        )
+        // Baseline behavior: dispatch the most time-critical batches first (FEFO-ish).
+        // This makes Regular more realistic (and typically more wasteful) vs. ML.
+        .sort((a, b) => {
+          const ra = Number(a.remainingHours);
+          const rb = Number(b.remainingHours);
+          if (Number.isFinite(ra) && Number.isFinite(rb) && ra !== rb) {
+            return ra - rb;
+          }
+
+          const ta = a.batch.manufacture_date
+            ? new Date(a.batch.manufacture_date).getTime()
+            : a.batch.createdAt
+              ? new Date(a.batch.createdAt).getTime()
+              : 0;
+          const tb = b.batch.manufacture_date
+            ? new Date(b.batch.manufacture_date).getTime()
+            : b.batch.createdAt
+              ? new Date(b.batch.createdAt).getTime()
+              : 0;
+
+          return ta - tb;
+        })
+        .map((x) => x.batch);
 
       debugAlloc(
         `[allocateRegular]   Found ${availableBatches.length} matching batches`
@@ -185,17 +296,21 @@ export async function allocateRegular(requests, batches, warehouses, ngos) {
         }
       }
 
-      allocations.push({
-        requestId: request.requestID,
-        foodType: item.foodType,
-        required_kg: item.required_kg,
-        allocated_kg: item.required_kg - remaining,
-        warehouse: nearestWarehouse._id,
-        warehouseName: nearestWarehouse.name,
-        distance_km: minDistance,
-        batches: usedBatches,
-        strategy: "regular",
-      });
+      const allocatedKg = item.required_kg - remaining;
+      if (allocatedKg > 0) {
+        allocations.push({
+          requestId: request.requestID,
+          foodType: item.foodType,
+          required_kg: item.required_kg,
+          allocated_kg: allocatedKg,
+          warehouse: sourceWarehouse._id,
+          warehouseName: sourceWarehouse.name,
+          distance_km: sourceDistanceKm,
+          batches: usedBatches,
+          strategy: "regular",
+          dispatchTime: dispatchTime.toISOString(),
+        });
+      }
     }
   }
 
@@ -208,9 +323,36 @@ export async function allocateRegular(requests, batches, warehouses, ngos) {
  * - Pre-positions inventory based on forecasted hotspots
  * - Optimizes for freshness (60%) + distance (40%)
  */
-export async function allocateML(requests, batches, warehouses, ngos) {
+export async function allocateML(
+  requests,
+  batches,
+  warehouses,
+  ngos,
+  options = {}
+) {
   const allocations = [];
   const unusedBatches = [...batches];
+
+  const referenceDateRaw = options?.referenceDate;
+  const referenceDate = referenceDateRaw ? new Date(referenceDateRaw) : null;
+  const hasReferenceDate =
+    referenceDate instanceof Date && !Number.isNaN(referenceDate.getTime());
+
+  const dispatchTimeFloorRaw = options?.dispatchTimeFloor;
+  const dispatchTimeFloor = dispatchTimeFloorRaw
+    ? new Date(dispatchTimeFloorRaw)
+    : null;
+  const hasDispatchFloor =
+    dispatchTimeFloor instanceof Date &&
+    !Number.isNaN(dispatchTimeFloor.getTime());
+
+  const dispatchTimeCeilRaw = options?.dispatchTimeCeil;
+  const dispatchTimeCeil = dispatchTimeCeilRaw
+    ? new Date(dispatchTimeCeilRaw)
+    : null;
+  const hasDispatchCeil =
+    dispatchTimeCeil instanceof Date &&
+    !Number.isNaN(dispatchTimeCeil.getTime());
 
   const preferredMinDeliveredFreshnessPct = Number(
     process.env.ML_MIN_DELIVERED_FRESHNESS_PCT ?? 55
@@ -222,14 +364,29 @@ export async function allocateML(requests, batches, warehouses, ngos) {
   // Strongly prefer nearby allocations to keep routes realistic.
   // If nothing is feasible within the cap (e.g., no eligible batches nearby), we fall back to the best overall option.
   const maxPreferredDistanceKm = Number(process.env.ML_MAX_DISTANCE_KM ?? 250);
-  const distanceDecayKm = Number(process.env.ML_DISTANCE_DECAY_KM ?? 35);
+  const distanceDecayKm = Number(process.env.ML_DISTANCE_DECAY_KM ?? 70);
 
   // Hard limits to prevent pathological long-haul allocations.
   const hardMaxDistanceKm = Number(process.env.ML_HARD_MAX_DISTANCE_KM ?? 450);
-  const topKWarehouses = Number(process.env.ML_TOP_K_WAREHOUSES ?? 8);
+  const topKWarehouses = Number(process.env.ML_TOP_K_WAREHOUSES ?? 12);
 
   // Fetch NGO organizations to map request.requesterNode (NGO ID) to Node
   const ngoOrgs = await NGO.find().lean();
+
+  // Build lookup to map NGO org id -> NGO node id for ML feature engineering joins.
+  // The ML feature engineering expects requests.requesterNode to match nodes._id.
+  const ngoOrgNameById = new Map(
+    (ngoOrgs || []).map((org) => [
+      org?._id?.toString?.() ?? String(org._id),
+      org?.name,
+    ])
+  );
+  const ngoNodeIdByName = new Map(
+    (ngos || []).map((node) => [
+      node?.name,
+      node?._id?.toString?.() ?? String(node._id),
+    ])
+  );
 
   // Optional ML context (anomaly/demand signals). Allocation still works without this.
   let regionalSignals = new Map();
@@ -265,6 +422,23 @@ export async function allocateML(requests, batches, warehouses, ngos) {
         originNode: b.originNode?.toString?.() ?? String(b.originNode),
         currentNode: b.currentNode?.toString?.() ?? String(b.currentNode),
         manufacture_date: b.manufacture_date,
+        expiry_iso: b.expiry_iso,
+        quantity_kg:
+          typeof b.quantity_kg === "number"
+            ? b.quantity_kg
+            : Number(b.quantity_kg) || 0,
+        original_quantity_kg:
+          typeof b.original_quantity_kg === "number"
+            ? b.original_quantity_kg
+            : Number(b.original_quantity_kg) || null,
+        shelf_life_hours:
+          typeof b.shelf_life_hours === "number"
+            ? b.shelf_life_hours
+            : Number(b.shelf_life_hours) || null,
+        freshnessPct:
+          typeof b.freshnessPct === "number"
+            ? b.freshnessPct
+            : Number(b.freshnessPct) || null,
         foodType: b.foodType,
       })),
     };
@@ -312,9 +486,32 @@ export async function allocateML(requests, batches, warehouses, ngos) {
     const ngoNode = ngos.find((n) => n.name === ngoOrg.name);
     if (!ngoNode) continue;
 
-    const dispatchTime = request.createdOn
-      ? new Date(request.createdOn)
-      : new Date();
+    // IMPORTANT:
+    // Simulations and metrics treat dispatch as-of the snapshot reference date.
+    // If we plan using historical request.createdOn timestamps, ML can select batches
+    // that are "fresh enough" then, but are spoiled by the snapshot dispatch time.
+    let dispatchTime = request?.dispatchTime
+      ? new Date(request.dispatchTime)
+      : request.createdOn
+        ? new Date(request.createdOn)
+        : new Date();
+    // Back-compat: if a fixed referenceDate is provided and no clamping window is set,
+    // treat dispatch as-of the snapshot time.
+    if (hasReferenceDate && !hasDispatchFloor && !hasDispatchCeil) {
+      dispatchTime = referenceDate;
+    }
+    if (
+      hasDispatchFloor &&
+      dispatchTime.getTime() < dispatchTimeFloor.getTime()
+    ) {
+      dispatchTime = dispatchTimeFloor;
+    }
+    if (
+      hasDispatchCeil &&
+      dispatchTime.getTime() > dispatchTimeCeil.getTime()
+    ) {
+      dispatchTime = dispatchTimeCeil;
+    }
 
     const regionKey = `${ngoNode.state || ngoNode.regionId || "Unknown"}-${ngoNode.district || "Unknown"}`;
     const signal = regionalSignals.get(regionKey);
@@ -324,13 +521,16 @@ export async function allocateML(requests, batches, warehouses, ngos) {
       let bestScoreOverall = -Infinity;
       let bestWarehouseOverall = null;
       let bestBatchesOverall = [];
+      let bestFulfillmentOverall = 0;
 
       let bestScoreInCap = -Infinity;
       let bestWarehouseInCap = null;
       let bestBatchesInCap = [];
+      let bestFulfillmentInCap = 0;
 
-      // Evaluate only nearby warehouses (top-K by distance) to avoid absurd routes.
-      const warehouseCandidates = (warehouses || [])
+      // Evaluate nearby warehouses (top-K by distance) first.
+      // If that yields nothing feasible (e.g., stock exists but outside top-K), expand to all within the hard cap.
+      const allWarehouseCandidates = (warehouses || [])
         .map((warehouse) => {
           const distance = haversineDistanceKm(
             {
@@ -351,132 +551,189 @@ export async function allocateML(requests, batches, warehouses, ngos) {
             x.distance >= 0 &&
             x.distance <= hardMaxDistanceKm
         )
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, Math.max(1, topKWarehouses));
+        .sort((a, b) => a.distance - b.distance);
 
-      for (const { warehouse, distance } of warehouseCandidates) {
-        const travelHours = estimateTravelHours(distance);
-        const minRemainingHoursRequired = travelHours + 2; // buffer for delays
+      const primaryCandidates = allWarehouseCandidates.slice(
+        0,
+        Math.max(1, topKWarehouses)
+      );
 
-        const deliveryTime = new Date(
-          dispatchTime.getTime() + travelHours * 3600 * 1000
-        );
+      const evaluateCandidates = (warehouseCandidates) => {
+        for (const { warehouse, distance } of warehouseCandidates) {
+          const travelHours = estimateTravelHours(distance);
+          const minRemainingHoursRequired = travelHours + 2; // buffer for delays
 
-        // Get batches for this food type at this warehouse
-        const candidateBatches = unusedBatches
-          .filter(
-            (b) =>
-              b.foodType === item.foodType &&
-              b.currentNode &&
-              b.currentNode.toString() === warehouse._id.toString() &&
-              b.status === "stored"
-          )
-          .map((b) => ({
-            batch: b,
-            remainingHours: safeRemainingShelfLifeHours(b, dispatchTime),
-            freshnessAtDelivery: calculateFreshnessPct(b, deliveryTime),
-          }))
-          .filter((x) => x.remainingHours > minRemainingHoursRequired);
-
-        const strictEligible = candidateBatches
-          .filter(
-            (x) => x.freshnessAtDelivery >= preferredMinDeliveredFreshnessPct
-          )
-          // Prefer higher freshness at delivery; use FEFO only as a tie-breaker.
-          .sort(
-            (a, b) =>
-              b.freshnessAtDelivery - a.freshnessAtDelivery ||
-              a.remainingHours - b.remainingHours
+          const deliveryTime = new Date(
+            dispatchTime.getTime() + travelHours * 3600 * 1000
           );
 
-        const relaxedEligible = candidateBatches
-          .filter(
-            (x) => x.freshnessAtDelivery >= relaxedMinDeliveredFreshnessPct
-          )
-          .sort(
-            (a, b) =>
-              b.freshnessAtDelivery - a.freshnessAtDelivery ||
-              a.remainingHours - b.remainingHours
+          // Get batches for this food type at this warehouse
+          const candidateBatches = unusedBatches
+            .filter(
+              (b) =>
+                b.foodType === item.foodType &&
+                b.currentNode &&
+                b.currentNode.toString() === warehouse._id.toString() &&
+                b.status === "stored" &&
+                (() => {
+                  const availRaw = b.manufacture_date || b.createdAt || null;
+                  if (!availRaw) return true;
+                  const availMs = new Date(availRaw).getTime();
+                  return (
+                    !Number.isFinite(availMs) ||
+                    availMs <= dispatchTime.getTime()
+                  );
+                })()
+            )
+            .map((b) => ({
+              batch: b,
+              remainingHours: safeRemainingShelfLifeHours(b, dispatchTime),
+              freshnessAtDelivery: calculateFreshnessPct(b, deliveryTime),
+            }))
+            // Must exist and not be expired at dispatch; avoid intentionally spoiled-at-arrival.
+            .filter(
+              (x) =>
+                x.remainingHours > 0 &&
+                Number.isFinite(x.freshnessAtDelivery) &&
+                x.freshnessAtDelivery > 0
+            );
+
+          const strictEligible = candidateBatches
+            .filter(
+              (x) => x.freshnessAtDelivery >= preferredMinDeliveredFreshnessPct
+            )
+            // Prefer higher freshness at delivery; use FEFO only as a tie-breaker.
+            .sort(
+              (a, b) =>
+                b.freshnessAtDelivery - a.freshnessAtDelivery ||
+                a.remainingHours - b.remainingHours
+            );
+
+          const relaxedEligible = candidateBatches
+            .filter(
+              (x) => x.freshnessAtDelivery >= relaxedMinDeliveredFreshnessPct
+            )
+            .sort(
+              (a, b) =>
+                b.freshnessAtDelivery - a.freshnessAtDelivery ||
+                a.remainingHours - b.remainingHours
+            );
+
+          const fallbackEligible = candidateBatches
+            // Never intentionally ship already-spoiled-at-arrival food.
+            .filter((x) => x.freshnessAtDelivery > 0)
+            .sort(
+              (a, b) =>
+                b.freshnessAtDelivery - a.freshnessAtDelivery ||
+                a.remainingHours - b.remainingHours
+            );
+
+          let usingRelaxed = false;
+          let usingFallback = false;
+          let availableBatches = strictEligible;
+          if (availableBatches.length === 0 && relaxedEligible.length > 0) {
+            usingRelaxed = true;
+            availableBatches = relaxedEligible;
+          }
+          if (availableBatches.length === 0 && fallbackEligible.length > 0) {
+            usingRelaxed = true;
+            usingFallback = true;
+            availableBatches = fallbackEligible;
+          }
+
+          if (availableBatches.length === 0) continue;
+
+          const totalAvailable = availableBatches.reduce(
+            (sum, x) => sum + (x.batch.quantity_kg || 0),
+            0
           );
 
-        const usingRelaxed = strictEligible.length === 0;
-        const availableBatches = usingRelaxed
-          ? relaxedEligible
-          : strictEligible;
+          // Calculate weighted freshness
+          let cumulativeQty = 0;
+          let weightedDeliveredFreshness = 0;
+          let weightedExpiryPressure = 0;
+          for (const {
+            batch,
+            remainingHours,
+            freshnessAtDelivery,
+          } of availableBatches) {
+            const usableQty = Math.min(
+              batch.quantity_kg,
+              item.required_kg - cumulativeQty
+            );
 
-        if (availableBatches.length === 0) continue;
+            weightedDeliveredFreshness +=
+              freshnessAtDelivery * (usableQty / item.required_kg);
 
-        const totalAvailable = availableBatches.reduce(
-          (sum, x) => sum + (x.batch.quantity_kg || 0),
-          0
-        );
+            // Higher when remaining time is low (but safe), promoting waste avoidance.
+            const expiryPressure = 1 / (1 + remainingHours / 24);
+            weightedExpiryPressure +=
+              expiryPressure * (usableQty / item.required_kg);
 
-        // Calculate weighted freshness
-        let cumulativeQty = 0;
-        let weightedDeliveredFreshness = 0;
-        let weightedExpiryPressure = 0;
-        for (const {
-          batch,
-          remainingHours,
-          freshnessAtDelivery,
-        } of availableBatches) {
-          const usableQty = Math.min(
-            batch.quantity_kg,
-            item.required_kg - cumulativeQty
+            cumulativeQty += usableQty;
+            if (cumulativeQty >= item.required_kg) break;
+          }
+
+          const fulfillmentRatio = Math.min(
+            1,
+            totalAvailable / item.required_kg
           );
 
-          weightedDeliveredFreshness +=
-            freshnessAtDelivery * (usableQty / item.required_kg);
+          // Exponential distance penalty (very strong) to keep travel realistic.
+          // Smaller decay => harsher penalty for long routes.
+          const distanceScore = Math.exp(-distance / distanceDecayKm);
 
-          // Higher when remaining time is low (but safe), promoting waste avoidance.
-          const expiryPressure = 1 / (1 + remainingHours / 24);
-          weightedExpiryPressure +=
-            expiryPressure * (usableQty / item.required_kg);
+          // Composite: distance + delivered freshness + waste-avoidance + fulfillment.
+          // Prioritize delivered freshness and fulfillment; keep distance realistic via exponential penalty.
+          let score =
+            (distanceScore * 0.1 +
+              (weightedDeliveredFreshness / 100) * 0.45 +
+              weightedExpiryPressure * 0.05 +
+              fulfillmentRatio * 0.4) *
+            urgencyBoost;
 
-          cumulativeQty += usableQty;
-          if (cumulativeQty >= item.required_kg) break;
+          // If we had to relax freshness constraints, discourage this choice unless it materially helps.
+          if (usingFallback) score *= 0.95;
+          else if (usingRelaxed) score *= 0.98;
+
+          if (score > bestScoreOverall) {
+            bestScoreOverall = score;
+            bestWarehouseOverall = warehouse;
+            bestBatchesOverall = availableBatches;
+            bestFulfillmentOverall = fulfillmentRatio;
+          }
+
+          if (distance <= maxPreferredDistanceKm && score > bestScoreInCap) {
+            bestScoreInCap = score;
+            bestWarehouseInCap = warehouse;
+            bestBatchesInCap = availableBatches;
+            bestFulfillmentInCap = fulfillmentRatio;
+          }
         }
+      };
 
-        const fulfillmentRatio = Math.min(1, totalAvailable / item.required_kg);
-
-        // Exponential distance penalty (very strong) to keep travel realistic.
-        // Smaller decay => harsher penalty for long routes.
-        const distanceScore = Math.exp(-distance / distanceDecayKm);
-
-        // Composite: distance + delivered freshness + waste-avoidance + fulfillment.
-        // Heavily weight distance so ML doesn't "win" freshness by traveling 300-800km.
-        let score =
-          (distanceScore * 0.6 +
-            (weightedDeliveredFreshness / 100) * 0.3 +
-            weightedExpiryPressure * 0.05 +
-            fulfillmentRatio * 0.05) *
-          urgencyBoost;
-
-        // If we had to relax freshness constraints, discourage this choice unless it materially helps.
-        if (usingRelaxed) score *= 0.6;
-
-        // Penalty for partial fulfillment
-        if (fulfillmentRatio < 1.0) {
-          score *= 0.3 * fulfillmentRatio;
-        }
-
-        if (score > bestScoreOverall) {
-          bestScoreOverall = score;
-          bestWarehouseOverall = warehouse;
-          bestBatchesOverall = availableBatches;
-        }
-
-        if (distance <= maxPreferredDistanceKm && score > bestScoreInCap) {
-          bestScoreInCap = score;
-          bestWarehouseInCap = warehouse;
-          bestBatchesInCap = availableBatches;
-        }
+      evaluateCandidates(primaryCandidates);
+      // If top-K didn't find a good/full plan, widen the search.
+      if (
+        allWarehouseCandidates.length > primaryCandidates.length &&
+        (!bestWarehouseOverall || bestFulfillmentOverall < 0.95)
+      ) {
+        evaluateCandidates(allWarehouseCandidates);
       }
 
-      const bestWarehouse = bestWarehouseInCap || bestWarehouseOverall;
-      const bestBatches = bestWarehouseInCap
-        ? bestBatchesInCap
-        : bestBatchesOverall;
+      // Prefer in-cap only when it can fulfill a meaningful share; otherwise allow a farther warehouse.
+      const minInCapFulfillment = Number(
+        process.env.ML_MIN_INCAP_FULFILLMENT_RATIO ?? 0.6
+      );
+      const useInCap =
+        bestWarehouseInCap &&
+        Number.isFinite(bestFulfillmentInCap) &&
+        bestFulfillmentInCap >= minInCapFulfillment;
+
+      const bestWarehouse = useInCap
+        ? bestWarehouseInCap
+        : bestWarehouseOverall;
+      const bestBatches = useInCap ? bestBatchesInCap : bestBatchesOverall;
 
       if (!bestWarehouse) continue;
 
@@ -527,6 +784,7 @@ export async function allocateML(requests, batches, warehouses, ngos) {
         distance_km: distance,
         batches: usedBatches,
         strategy: "ml",
+        dispatchTime: dispatchTime.toISOString(),
       });
     }
   }

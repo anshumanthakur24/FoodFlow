@@ -1,5 +1,5 @@
-const { runTransferPlanner } = require('./pythonRunner');
-const { buildRouteBetween } = require('./routeService');
+const { runTransferPlanner } = require("./pythonRunner");
+const { buildRouteBetween } = require("./routeService");
 
 function coerceNumber(value) {
   if (value === undefined || value === null) {
@@ -12,15 +12,15 @@ function coerceNumber(value) {
 function buildPlannerArgs(options = {}) {
   const args = [];
   if (options.mode) {
-    args.push('--mode', options.mode);
+    args.push("--mode", options.mode);
   }
 
   const numericOptions = [
-    ['--max-pairs', coerceNumber(options.maxPairs)],
-    ['--min-transfer-kg', coerceNumber(options.minTransferKg)],
-    ['--overstock-ratio', coerceNumber(options.overstockRatio)],
-    ['--understock-ratio', coerceNumber(options.understockRatio)],
-    ['--target-ratio', coerceNumber(options.targetRatio)],
+    ["--max-pairs", coerceNumber(options.maxPairs)],
+    ["--min-transfer-kg", coerceNumber(options.minTransferKg)],
+    ["--overstock-ratio", coerceNumber(options.overstockRatio)],
+    ["--understock-ratio", coerceNumber(options.understockRatio)],
+    ["--target-ratio", coerceNumber(options.targetRatio)],
   ];
 
   numericOptions.forEach(([flag, value]) => {
@@ -49,15 +49,15 @@ async function attachRouteToSuggestion(suggestion, { intervalKm, baseUrl }) {
   if (
     !sourceLocation ||
     !targetLocation ||
-    typeof sourceLocation.lat !== 'number' ||
-    typeof sourceLocation.lon !== 'number' ||
-    typeof targetLocation.lat !== 'number' ||
-    typeof targetLocation.lon !== 'number'
+    typeof sourceLocation.lat !== "number" ||
+    typeof sourceLocation.lon !== "number" ||
+    typeof targetLocation.lat !== "number" ||
+    typeof targetLocation.lon !== "number"
   ) {
     return {
       ...suggestion,
       route: null,
-      routeError: 'Missing numeric coordinates for source or target node.',
+      routeError: "Missing numeric coordinates for source or target node.",
     };
   }
 
@@ -86,7 +86,7 @@ async function enrichSuggestions(list, routeConfig) {
     return [];
   }
   const enriched = await Promise.all(
-    list.map((suggestion) => attachRouteToSuggestion(suggestion, routeConfig))
+    list.map((suggestion) => attachRouteToSuggestion(suggestion, routeConfig)),
   );
   return enriched;
 }
@@ -98,6 +98,7 @@ async function planTransfers({
   payload = {},
   intervalKm,
   routeServiceUrl,
+  includeRoutes = true,
 }) {
   const args = buildPlannerArgs(options);
   const plannerOutput = await runTransferPlanner({
@@ -107,17 +108,28 @@ async function planTransfers({
     payload,
   });
 
+  if (!includeRoutes) {
+    return {
+      ...plannerOutput,
+      routing: {
+        intervalKm: null,
+        baseUrl: null,
+        included: false,
+      },
+    };
+  }
+
   const effectiveIntervalKm = Math.max(1, coerceNumber(intervalKm) || 5);
-  const baseUrl = routeServiceUrl || 'https://router.project-osrm.org';
+  const baseUrl = routeServiceUrl || "https://router.project-osrm.org";
   const routeConfig = { intervalKm: effectiveIntervalKm, baseUrl };
 
   const warehouseTransfers = await enrichSuggestions(
     plannerOutput.warehouse_to_warehouse,
-    routeConfig
+    routeConfig,
   );
   const farmTransfers = await enrichSuggestions(
     plannerOutput.farm_to_warehouse,
-    routeConfig
+    routeConfig,
   );
 
   return {
@@ -127,6 +139,7 @@ async function planTransfers({
     routing: {
       intervalKm: effectiveIntervalKm,
       baseUrl,
+      included: true,
     },
   };
 }

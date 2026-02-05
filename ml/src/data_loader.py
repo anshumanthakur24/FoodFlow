@@ -33,6 +33,7 @@ class MongoDataLoader:
     def fetch_nodes(self) -> pd.DataFrame:
         projection = {
             "nodeId": 1,
+            "name": 1,
             "type": 1,
             "state": 1,
             "district": 1,
@@ -41,6 +42,12 @@ class MongoDataLoader:
             "capacity_kg": 1,
         }
         return self._collection_to_frame("nodes", projection=projection)
+
+    def fetch_ngos(self) -> pd.DataFrame:
+        projection = {
+            "name": 1,
+        }
+        return self._collection_to_frame("ngos", projection=projection)
 
     def fetch_batches(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> pd.DataFrame:
         query = self._date_query("manufacture_date", start, end)
@@ -59,12 +66,15 @@ class MongoDataLoader:
         return self._collection_to_frame("batches", query=query, projection=projection)
 
     def fetch_requests(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> pd.DataFrame:
-        query = self._date_query("requiredBy_iso", start, end)
+        # Backend A stores the request due date as requiredBefore.
+        query = self._date_query("requiredBefore", start, end)
         projection = {
             "requestId": 1,
+            "requestID": 1,
             "requesterNode": 1,
             "items": 1,
-            "requiredBy_iso": 1,
+            "requiredBefore": 1,
+            "createdOn": 1,
             "status": 1,
             "history": 1,
         }

@@ -115,6 +115,7 @@ app.post("/transfers/plan", async (req, res, next) => {
       targetRatio,
       intervalKm,
       filters,
+      includeRoutes,
     } = req.body || {};
 
     const plan = await planTransfers({
@@ -131,6 +132,7 @@ app.post("/transfers/plan", async (req, res, next) => {
       payload: { ...(req.body || {}), filters: filters || {} },
       intervalKm,
       routeServiceUrl: config.routeServiceUrl,
+      includeRoutes: includeRoutes !== false,
     });
 
     return res.json(plan);

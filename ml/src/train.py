@@ -83,6 +83,7 @@ def main() -> None:
 
     try:
         nodes_df = loader.fetch_nodes()
+        ngos_df = loader.fetch_ngos()
         batches_df = loader.fetch_batches(_to_datetime(start_ts), _to_datetime(end_ts))
         requests_df = loader.fetch_requests(_to_datetime(start_ts), _to_datetime(end_ts))
         shipments_df = loader.fetch_shipments(_to_datetime(start_ts), _to_datetime(end_ts))
@@ -95,6 +96,7 @@ def main() -> None:
         shipments_df=shipments_df,
         batches_df=batches_df,
         freq=config.feature_frequency,
+        ngos_df=ngos_df,
         festival_csv_path=config.festival_csv_path,
         income_csv_path=config.income_csv_path,
     )

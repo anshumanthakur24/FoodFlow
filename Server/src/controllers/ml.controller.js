@@ -33,6 +33,42 @@ const sendSimulationData = asyncHandler(async (req, res) => {
     const endpoint = `${baseURL}/predict`;
 
     /* ========================================================
+       MODE 0 — Raw snapshot provided by client (nodes/requests/shipments/batches)
+       This is used by the admin simulation UI so ML signals match the
+       exact dataset being simulated.
+    ======================================================== */
+    const hasSnapshotArrays =
+      Array.isArray(req.body?.nodes) ||
+      Array.isArray(req.body?.requests) ||
+      Array.isArray(req.body?.shipments) ||
+      Array.isArray(req.body?.batches);
+
+    if (hasSnapshotArrays && !Array.isArray(req.body?.records)) {
+      const payload = {
+        freq: typeof req.body?.freq === "string" ? req.body.freq : "M",
+        nodes: Array.isArray(req.body?.nodes) ? req.body.nodes : [],
+        requests: Array.isArray(req.body?.requests) ? req.body.requests : [],
+        shipments: Array.isArray(req.body?.shipments) ? req.body.shipments : [],
+        batches: Array.isArray(req.body?.batches) ? req.body.batches : [],
+      };
+
+      const response = await axios.post(endpoint, payload, {
+        headers: { "Content-Type": "application/json" },
+        timeout: 10000,
+      });
+
+      return res
+        .status(200)
+        .json(
+          new ApiResponse(
+            200,
+            response.data,
+            "Snapshot ML inference completed successfully."
+          )
+        );
+    }
+
+    /* ========================================================
        MODE 1 — Direct ML inference (records provided by client)
     ======================================================== */
     if (Array.isArray(req.body?.records)) {
@@ -199,19 +235,39 @@ const getData = asyncHandler(async (req, res) => {
 
   const endpoint = `${baseURL}/transfers/plan`;
 
-  const [nodes, batches] = await Promise.all([Node.find(), Batch.find()]);
+  const hasSnapshotArrays =
+    Array.isArray(req.body?.nodes) || Array.isArray(req.body?.batches);
 
-  const formattedNodes = nodes.map((n) => ({
-    _id: n._id.toString(),
-    nodeId: n._id.toString(),
-    type: n.type,
-    state: n.state || n.regionId || null,
-    district: n.district || null,
-    capacity_kg: Number(n.capacity_kg) || 0,
-    location: n.location || null,
-  }));
+  const [nodes, batches] = hasSnapshotArrays
+    ? [[], []]
+    : await Promise.all([
+        Node.find(),
+        Batch.find({ status: { $in: ["stored", "reserved"] } }),
+      ]);
 
-  const formattedBatches = batches.map((b) => {
+  const snapshotNodes = Array.isArray(req.body?.nodes) ? req.body.nodes : null;
+  const snapshotBatches = Array.isArray(req.body?.batches)
+    ? req.body.batches
+    : null;
+
+  const formattedNodes = (snapshotNodes || nodes).map((n) => {
+    const rawId = n?._id ?? n?.nodeId ?? n?.id ?? null;
+    const id = rawId ? String(rawId) : "";
+
+    return {
+      _id: id,
+      nodeId: id,
+      name: n?.name || null,
+      type: n?.type,
+      state: n?.state || n?.regionId || null,
+      district: n?.district || null,
+      regionId: n?.regionId || null,
+      capacity_kg: Number(n?.capacity_kg) || 0,
+      location: n?.location || null,
+    };
+  });
+
+  const formattedBatches = (snapshotBatches || batches).map((b) => {
     const quantity =
       typeof b.quantity_kg === "number"
         ? b.quantity_kg
@@ -247,8 +303,17 @@ const getData = asyncHandler(async (req, res) => {
 
   const response = await axios.post(
     endpoint,
-    { nodes: formattedNodes, batches: formattedBatches },
-    { headers: { "Content-Type": "application/json" }, timeout: 15000 }
+    {
+      nodes: formattedNodes,
+      batches: formattedBatches,
+      // Routing enrichment can be slow due to external OSRM calls.
+      // For the UI demo we only need the plan; routes can be added later.
+      includeRoutes: false,
+    },
+    {
+      headers: { "Content-Type": "application/json" },
+      timeout: 60000,
+    }
   );
 
   return res
@@ -256,20 +321,8 @@ const getData = asyncHandler(async (req, res) => {
     .json(
       new ApiResponse(
         200,
-        {
-          plan: response.data,
-          createdShipments: createdShipments.length,
-          shipments: createdShipments.map(s => ({
-            id: s._id,
-            shipmentID: s.shipmentID,
-            fromNode: s.fromNode,
-            toNode: s.toNode,
-            transfer_type: s.transfer_type,
-            suggested_quantity_kg: s.suggested_quantity_kg
-          })),
-          errors: errors.length > 0 ? errors : undefined
-        },
-        `Transfer plan generated successfully. ${createdShipments.length} shipment(s) created.`
+        response.data,
+        "Transfer plan generated successfully."
       )
     );
 });

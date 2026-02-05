@@ -26,13 +26,24 @@ export interface Shipment {
   startTime: Date;
   etaTime?: Date;
   arrivedTime?: Date;
-  status: "in_transit" | "arrived" | "delayed" | "cancelled";
+  status:
+    | "pending"
+    | "in_transit"
+    | "arrived"
+    | "delayed"
+    | "cancelled"
+    | "delivered";
   fromLat: number;
   fromLng: number;
   toLat: number;
   toLng: number;
   foodItem: string;
   value: number;
+  quantity_kg?: number;
+  distance_km?: number;
+  freshness_at_arrival?: number;
+  spoiled_kg?: number;
+  at_risk_kg?: number;
 }
 
 export interface ShipmentLocationUpdate {
@@ -47,14 +58,7 @@ export interface Event {
   id: string;
   eventId: string;
   time: Date;
-  type:
-    | "farm_production"
-    | "ngo_request"
-    | "shipment_created"
-    | "shipment_arrived"
-    | "shipment_location_update"
-    | "batch_spoiled"
-    | "prediction_made";
+  type: string;
   lat: number;
   lng: number;
   payload: unknown;

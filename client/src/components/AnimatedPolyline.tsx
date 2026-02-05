@@ -27,43 +27,65 @@ export default function AnimatedPolyline({
     const polyline = polylineRef.current;
     if (!polyline) return;
 
-    let rafId: number | null = null;
-    let cancelled = false;
+    // Prefer a CSS-based SVG dash animation (much cheaper than per-frame JS updates).
+    // Leaflet renders polylines as SVG paths; getElement() returns that path.
+    let el: SVGPathElement | null = null;
+    let raf: number | null = null;
 
-    if (!animated) {
-      polyline.setStyle({ dashArray });
-      return;
-    }
+    const apply = () => {
+      const element = polyline.getElement() as SVGPathElement | null;
+      if (!element) return;
+      el = element;
 
-    let offset = 0;
-    const tick = () => {
-      if (cancelled) return;
-      offset = (offset + 0.5) % 20;
-      const newDashArray = `${10 + offset}, ${10 - offset}`;
-      polyline.setStyle({ dashArray: newDashArray });
-      rafId = requestAnimationFrame(tick);
+      if (!animated) {
+        el.classList.remove("leaflet-animated-dash");
+        el.style.removeProperty("animation");
+        el.style.strokeDasharray = dashArray;
+        el.style.strokeDashoffset = "0";
+        return;
+      }
+
+      el.style.strokeDasharray = dashArray;
+      el.classList.add("leaflet-animated-dash");
     };
 
-    rafId = requestAnimationFrame(tick);
-
+    raf = requestAnimationFrame(apply);
     return () => {
-      cancelled = true;
-      if (rafId !== null) cancelAnimationFrame(rafId);
+      if (raf !== null) cancelAnimationFrame(raf);
+      if (el) {
+        el.classList.remove("leaflet-animated-dash");
+        el.style.removeProperty("animation");
+        el.style.removeProperty("stroke-dasharray");
+        el.style.removeProperty("stroke-dashoffset");
+      }
     };
   }, [animated, dashArray]);
 
   return (
-    <Polyline
-      ref={(ref) => {
-        if (ref) polylineRef.current = ref;
-      }}
-      positions={positions}
-      pathOptions={{
-        color,
-        weight,
-        opacity,
-        dashArray: animated ? "10, 10" : dashArray,
-      }}
-    />
+    <>
+      <Polyline
+        ref={(ref) => {
+          if (ref) polylineRef.current = ref;
+        }}
+        positions={positions}
+        pathOptions={{
+          color,
+          weight,
+          opacity,
+          dashArray,
+        }}
+      />
+      <style jsx global>{`
+        @keyframes leafletDashOffset {
+          to {
+            stroke-dashoffset: -40;
+          }
+        }
+
+        .leaflet-animated-dash {
+          animation: leafletDashOffset 1.2s linear infinite;
+        }
+      `}</style>
+    </>
   );
 }
